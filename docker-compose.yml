@@ -1,0 +1,129 @@
+version: "3.8"
+
+services:
+  # === Infrastructure ===
+  # Infrastructure services stay internal to the Docker network.
+
+  mongodb:
+    image: mongo:7
+    volumes:
+      - mongodb_data:/data/db
+    healthcheck:
+      test: mongosh --eval "db.runCommand('ping').ok" --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agents-network
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - agents-network
+
+  chromadb:
+    image: chromadb/chroma:0.6.3
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+    networks:
+      - agents-network
+
+  # === Application Services ===
+
+  auth:
+    build:
+      context: ./services/auth
+      dockerfile: Dockerfile
+    env_file: .env
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - agents-network
+
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+      auth:
+        condition: service_started
+    networks:
+      - agents-network
+
+  agent:
+    build:
+      context: ./services/agent
+      dockerfile: Dockerfile
+    env_file: .env
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    networks:
+      - agents-network
+
+  knowledge:
+    build:
+      context: ./services/knowledge
+      dockerfile: Dockerfile
+    env_file: .env
+    volumes:
+      - ./data/knowledgebase/tax:/app/data/knowledgebase/tax:ro
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      chromadb:
+        condition: service_started
+    networks:
+      - agents-network
+
+  orchestrator:
+    build:
+      context: ./services/orchestrator
+      dockerfile: Dockerfile
+    env_file: .env
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - agents-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    env_file: .env
+    environment:
+      - NEXT_PUBLIC_GATEWAY_URL=/gateway-api
+      - GATEWAY_URL=http://gateway:8000
+      - NEXTAUTH_URL=http://localhost:3000
+    depends_on:
+      gateway:
+        condition: service_started
+    networks:
+      - agents-network
+
+volumes:
+  mongodb_data:
+  redis_data:
+  chroma_data:
+
+networks:
+  agents-network:
+    driver: bridge

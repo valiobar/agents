@@ -1,0 +1,56 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+.env
+.env.*
+!.env.example
+!frontend/.env.example
+
+node_modules/
+.next/
+dist/
+build/
+coverage/
+htmlcov/
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+# Runtime and local data artifacts
+*.log
+logs/
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+.coverage
+.ipynb_checkpoints/
+uploads/
+data/uploads/
+data/chroma*/
+data/chromadb*/
+chroma/
+chromadb/
+
+# Local knowledge-base source binaries can make pushes large.
+# Keep small text fixtures/docs in git; store large binaries externally or with Git LFS.
+data/knowledgebase/**/*.pdf
+data/knowledgebase/**/*.doc
+data/knowledgebase/**/*.docx
+!data/knowledgebase/**/README.md
+!data/knowledgebase/**/*.txt
+!data/knowledgebase/**/.gitkeep
+
+# Cursor workspace metadata
+.cursor/
+
+# Local implementation plans (kept out of git)
+plans/
+

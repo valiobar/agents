@@ -1,0 +1,112 @@
+services:
+  mongodb:
+    ports:
+      - "27017:27017"
+
+  auth:
+    volumes:
+      - ./services/auth/app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
+    develop:
+      watch:
+        - action: sync
+          path: ./services/auth/app
+          target: /app/app
+        - action: rebuild
+          path: ./services/auth/requirements.txt
+        - action: rebuild
+          path: ./services/auth/Dockerfile
+
+  gateway:
+    volumes:
+      - ./gateway/app:/app/app
+    environment:
+      - RATE_LIMIT_PER_HOUR=10000
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    develop:
+      watch:
+        - action: sync
+          path: ./gateway/app
+          target: /app/app
+        - action: rebuild
+          path: ./gateway/requirements.txt
+        - action: rebuild
+          path: ./gateway/Dockerfile
+
+  agent:
+    volumes:
+      - ./services/agent/app:/app/app
+    environment:
+      - AGENT_ENV=development
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
+    develop:
+      watch:
+        - action: sync
+          path: ./services/agent/app
+          target: /app/app
+        - action: rebuild
+          path: ./services/agent/requirements.txt
+        - action: rebuild
+          path: ./services/agent/Dockerfile
+
+  knowledge:
+    volumes:
+      - ./services/knowledge/app:/app/app
+      - ./data/knowledgebase/tax:/app/data/knowledgebase/tax:ro
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8003 --reload
+    develop:
+      watch:
+        - action: sync
+          path: ./services/knowledge/app
+          target: /app/app
+        - action: rebuild
+          path: ./services/knowledge/requirements.txt
+        - action: rebuild
+          path: ./services/knowledge/Dockerfile
+
+  orchestrator:
+    volumes:
+      - ./services/orchestrator/app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8004 --reload
+    develop:
+      watch:
+        - action: sync
+          path: ./services/orchestrator/app
+          target: /app/app
+        - action: rebuild
+          path: ./services/orchestrator/requirements.txt
+        - action: rebuild
+          path: ./services/orchestrator/Dockerfile
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      target: deps
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+      - frontend_next:/app/.next
+    command: npm run dev -- --hostname 0.0.0.0
+    environment:
+      - NODE_ENV=development
+      - NEXT_TELEMETRY_DISABLED=1
+      - WATCHPACK_POLLING=true
+    develop:
+      watch:
+        - action: sync
+          path: ./frontend
+          target: /app
+          ignore:
+            - node_modules/
+            - .next/
+        - action: rebuild
+          path: ./frontend/package.json
+        - action: rebuild
+          path: ./frontend/package-lock.json
+        - action: rebuild
+          path: ./frontend/Dockerfile
+
+volumes:
+  frontend_node_modules:
+  frontend_next:
