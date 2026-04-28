@@ -5,6 +5,7 @@ This document maps every dependency relationship in the Agent Platform: service-
 > **Related docs:**
 > - `docs/architecture/overview.md` — system architecture and patterns
 > - `plans/agent_microservices_architecture_f9eb3905.plan.md` — full architecture plan
+> - `plans/business_microservice_split_cfcd13dc.plan.md` — Business Service ownership split
 
 ---
 
@@ -28,11 +29,12 @@ graph TD
         AGENT["Agent Service<br/><i>FastAPI :8002</i>"]
         KB["Knowledge Base Service<br/><i>FastAPI :8003</i>"]
         ORCH["Orchestrator Service<br/><i>FastAPI :8004</i>"]
+        BUSINESS["Business Service<br/><i>FastAPI :8005</i>"]
     end
 
     subgraph ai_layer ["AI Layer (inside Agent Service)"]
         LC["LangChain AgentExecutor"]
-        TOOLS["Agent Tools<br/><i>rag_search, calculator,<br/>query_invoices, query_expenses,<br/>get_financial_summary, create_invoice,<br/>record_expense</i>"]
+        TOOLS["Agent Tools<br/><i>rag_search, calculator,<br/>query_invoices, query_expenses,<br/>get_financial_summary, create_invoice,<br/>record_expense, partner tools</i>"]
         LLM["LLM Providers<br/><i>OpenAI / Anthropic / DeepSeek / Ollama</i>"]
     end
 
@@ -48,7 +50,8 @@ graph TD
 
     %% Gateway → Services
     GW -->|"/auth/*"| AUTH
-    GW -->|"/agents/*, /conversations/*, /invoices/*, /expenses/*"| AGENT
+    GW -->|"/agents/*, /conversations/*"| AGENT
+    GW -->|"/companies/*, /partners/*, /invoices/*, /expenses/*"| BUSINESS
     GW -->|"/documents, /retrieve"| KB
     GW -->|"/orchestrator/*"| ORCH
 
@@ -63,11 +66,14 @@ graph TD
     LC --> TOOLS
     LC -->|"prompt + stream"| LLM
     TOOLS -->|"rag_search → POST /retrieve"| KB
-    TOOLS -->|"financial tools use services / repositories"| MONGO
+    TOOLS -->|"BusinessClient<br/>financial + partner tools"| BUSINESS
 
     %% Knowledge Base → Infrastructure
     KB -->|"documents metadata"| MONGO
     KB -->|"embeddings + chunks"| CHROMA
+
+    %% Business → Infrastructure
+    BUSINESS -->|"companies, partners,<br/>invoices, expenses, counters"| MONGO
 
     %% Orchestrator → Infrastructure (Phase 2)
     ORCH -->|"Redis Streams<br/>(Phase 2)"| REDIS
@@ -82,7 +88,7 @@ graph TD
 
     class Browser extNode
     class FE,GW exposed
-    class AUTH,AGENT,KB,ORCH appSvc
+    class AUTH,AGENT,KB,ORCH,BUSINESS appSvc
     class MONGO,REDIS,CHROMA infraNode
     class LC,TOOLS,LLM aiNode
 ```
@@ -93,16 +99,17 @@ graph TD
 
 Each row is a service. Columns show what it depends on. Read as: *"Row service requires Column service to function."*
 
-| Service | MongoDB | Redis | ChromaDB | Auth Service | Agent Service | KB Service | Orchestrator | LLM Providers |
-|---------|:-------:|:-----:|:--------:|:------------:|:-------------:|:----------:|:------------:|:-------------:|
-| **API Gateway** | — | **Rate limiting** | — | Route target | Route target | Route target | Route target | — |
-| **Auth Service** | **users** | — | — | — | — | — | — | — |
-| **Agent Service** | **agents, conversations, invoices, expenses, counters** | — | — | — | — | **RAG retrieval** | — | **OpenAI / Anthropic / DeepSeek / Ollama** |
-| **Knowledge Base** | **documents** (metadata) | — | **embeddings + chunks** | — | — | — | — | **OpenAI** (embedding) |
-| **Orchestrator** | — | **Redis Streams** (Phase 2) | — | — | Task dispatch (Phase 2) | — | — | — |
-| **Frontend** | — | — | — | — | — | — | — | — |
+| Service | MongoDB | Redis | ChromaDB | Auth Service | Agent Service | Business Service | KB Service | Orchestrator | LLM Providers |
+|---------|:-------:|:-----:|:--------:|:------------:|:-------------:|:----------------:|:----------:|:------------:|:-------------:|
+| **API Gateway** | — | **Rate limiting** | — | Route target | Route target | Route target | Route target | Route target | — |
+| **Auth Service** | **users** | — | — | — | — | — | — | — | — |
+| **Agent Service** | **agents, conversations** | — | — | — | — | **financial + partner tools, company validation** | **RAG retrieval** | — | **OpenAI / Anthropic / DeepSeek / Ollama** |
+| **Business Service** | **companies, partners, invoices, expenses, counters** | — | — | — | — | — | — | — | — |
+| **Knowledge Base** | **documents** (metadata) | — | **embeddings + chunks** | — | — | **company validation target** | — | — | **OpenAI** (embedding) |
+| **Orchestrator** | — | **Redis Streams** (Phase 2) | — | — | Task dispatch (Phase 2) | — | — | — | — |
+| **Frontend** | — | — | — | — | — | — | — | — | — |
 
-**How to read:** The Agent Service row shows it depends on MongoDB for `agents`, `conversations`, `invoices`, `expenses`, and invoice `counters`, on the Knowledge Base Service during `rag_search` tool execution, and on external or local LLM providers. It does not depend on Auth, Orchestrator, Redis, or ChromaDB directly.
+**How to read:** The Agent Service row shows it depends on MongoDB only for runtime-owned `agents` and `conversations`, on Business during financial/partner tool execution and company assignment validation, on the Knowledge Base Service during `rag_search` tool execution, and on external or local LLM providers. It does not depend on Auth, Orchestrator, Redis, or ChromaDB directly.
 
 ---
 
@@ -121,6 +128,7 @@ graph LR
     subgraph tier1 ["Tier 1 — Application Services"]
         A["Auth"]
         AG["Agent"]
+        B["Business"]
         K["Knowledge"]
         O["Orchestrator"]
     end
@@ -132,35 +140,38 @@ graph LR
 
     M -->|"healthy"| A
     M -->|"healthy"| AG
+    M -->|"healthy"| B
     M -->|"healthy"| K
     R -->|"healthy"| GW
     R -->|"healthy"| O
     C -->|"started"| K
     A -->|"started"| GW
+    B -->|"started"| GW
     GW -->|"started"| FE
 
     classDef t0 fill:#E74C3C,stroke:#A83228,color:#fff
     classDef t1 fill:#3498DB,stroke:#21618C,color:#fff
     classDef t2 fill:#2ECC71,stroke:#1A9850,color:#fff
     class M,R,C t0
-    class A,AG,K,O t1
+    class A,AG,B,K,O t1
     class GW,FE t2
 ```
 
 | Service | Depends On | Condition | Reason |
 |---------|-----------|-----------|--------|
 | **Auth** | MongoDB | `service_healthy` | Needs `users` collection on startup |
-| **Agent** | MongoDB | `service_healthy` | Needs `agents`, `conversations`, `invoices`, `expenses`, and `counters` collections |
+| **Agent** | MongoDB | `service_healthy` | Needs `agents` and `conversations` collections |
+| **Business** | MongoDB | `service_healthy` | Needs `companies`, `partners`, `invoices`, `expenses`, and `counters` collections |
 | **Knowledge** | MongoDB, ChromaDB | `service_healthy`, `service_started` | Metadata in Mongo, vectors in Chroma |
 | **Orchestrator** | Redis | `service_healthy` | Will use Redis Streams for task coordination |
-| **Gateway** | Redis, Auth | `service_healthy`, `service_started` | Rate limiting needs Redis; auth proxying needs Auth alive |
+| **Gateway** | Redis, Auth, Business | `service_healthy`, `service_started` | Rate limiting needs Redis; auth and business proxy targets should be alive |
 | **Frontend** | Gateway | `service_started` | All API calls go through the gateway |
 
 **Startup sequence in practice:**
 1. MongoDB, Redis, ChromaDB start in parallel (no dependencies)
-2. Once Mongo is healthy → Auth, Agent, Knowledge start in parallel
+2. Once Mongo is healthy → Auth, Agent, Business, Knowledge start in parallel
 3. Once Redis is healthy → Orchestrator starts
-4. Once Redis is healthy + Auth is started → Gateway starts
+4. Once Redis is healthy + Auth and Business are started → Gateway starts
 5. Once Gateway is started → Frontend starts
 
 ---
@@ -176,9 +187,11 @@ Which service writes to and reads from each data store, and what data it owns.
 | `users` | Auth Service | Auth Service | User accounts, credentials, Google OAuth links |
 | `agents` | Agent Service | Agent Service | Agent instance configs (type, LLM provider, KB refs) |
 | `conversations` | Agent Service | Agent Service | Chat message history per agent session |
-| `invoices` | Agent Service | Agent Service REST routes and LangChain tools | Financial invoices queried and created by both UI/API clients and the Accountant Agent |
-| `expenses` | Agent Service | Agent Service REST routes and LangChain tools | Financial expenses recorded and queried by both UI/API clients and the Accountant Agent |
-| `counters` | Agent Service | Agent Service | Atomic invoice number sequences per user and year |
+| `companies` | Business Service | Business routes, Agent via BusinessClient, Knowledge validation | Company ownership and company profile data |
+| `partners` | Business Service | Business routes and Agent via BusinessClient | Company-scoped customers, suppliers, and registry imports |
+| `invoices` | Business Service | Business routes and Agent via BusinessClient | Financial invoices queried and created by both UI/API clients and the Accountant Agent |
+| `expenses` | Business Service | Business routes and Agent via BusinessClient | Financial expenses recorded and queried by both UI/API clients and the Accountant Agent |
+| `counters` | Business Service | Business Service | Atomic invoice number sequences per user and year |
 | `documents` | Knowledge Base | Knowledge Base | Document metadata + content hashes (vectors live in ChromaDB) |
 
 ### ChromaDB Collections
@@ -207,27 +220,34 @@ graph LR
     GW["Gateway :8000"]
     AUTH["Auth :8001"]
     AGENT["Agent :8002"]
+    BUSINESS["Business :8005"]
     KB["Knowledge :8003"]
     ORCH["Orchestrator :8004"]
 
     GW -->|"proxy /auth/*"| AUTH
-    GW -->|"proxy /agents/*"| AGENT
+    GW -->|"proxy /agents/*, /conversations/*"| AGENT
+    GW -->|"proxy /companies/*, /partners/*,<br/>/invoices/*, /expenses/*"| BUSINESS
     GW -->|"proxy /documents, /retrieve"| KB
     GW -->|"proxy /orchestrator/*"| ORCH
+    AGENT -->|"financial + partner tools<br/>GET /companies/{id}/exists"| BUSINESS
     AGENT -->|"POST /retrieve<br/>(RAG search)"| KB
+    KB -.->|"GET /companies/{id}/exists<br/>(Phase 5 validation target)"| BUSINESS
     ORCH -.->|"HTTP calls<br/>(Phase 2)"| AGENT
 
     classDef svc fill:#3498DB,stroke:#21618C,color:#fff
-    class GW,AUTH,AGENT,KB,ORCH svc
+    class GW,AUTH,AGENT,BUSINESS,KB,ORCH svc
 ```
 
 | From | To | Protocol | Path | Purpose |
 |------|-----|---------|------|---------|
 | Gateway | Auth | HTTP | `/auth/*` | Proxy registration, login, OAuth, profile requests |
-| Gateway | Agent | HTTP | `/agents/*`, `/conversations/*`, `/invoices/*`, `/expenses/*` | Proxy agent CRUD, conversation reads, chat (SSE), and financial record CRUD |
+| Gateway | Agent | HTTP | `/agents/*`, `/conversations/*` | Proxy agent CRUD, conversation reads, and chat (SSE) |
+| Gateway | Business | HTTP | `/companies/*`, `/partners/*`, `/invoices/*`, `/expenses/*` | Proxy company, partner, invoice, and expense APIs |
 | Gateway | Knowledge | HTTP | `/documents`, `/retrieve` | Proxy document upload, lifecycle, and retrieval |
 | Gateway | Orchestrator | HTTP | `/orchestrator/*` | Proxy workflow management (Phase 2) |
+| Agent | Business | HTTP | `/companies/{id}/exists`, `/partners`, `/invoices`, `/expenses`, `/financial-summary` | Validate company assignment and execute financial/partner tools |
 | Agent | Knowledge | HTTP | `POST /retrieve` | RAG semantic search during agent tool execution |
+| Knowledge | Business | HTTP | `GET /companies/{id}/exists` | Phase 5 target for validating company ownership on uploads and user-document retrieval |
 | Orchestrator | Agent | HTTP | (Phase 2) | Task dispatch to agent workers |
 
 ---
@@ -244,6 +264,7 @@ Only two services are reachable from outside the Docker network.
 | Agent | not published | Internal only | Reachable as `http://agent:8002` on `agents-network` |
 | Knowledge | not published | Internal only | Reachable as `http://knowledge:8003` on `agents-network` |
 | Orchestrator | not published | Internal only | Reachable as `http://orchestrator:8004` on `agents-network` |
+| Business | not published | Internal only | Reachable as `http://business:8005` on `agents-network` |
 | MongoDB | not published | Internal only | Reachable as `mongodb:27017` on `agents-network` |
 | Redis | not published | Internal only | Reachable as `redis:6379` on `agents-network` |
 | ChromaDB | not published | Internal only | Reachable as `chromadb:8000` on `agents-network` |
@@ -262,6 +283,7 @@ Services that reach outside the Docker network.
 | Agent Service | Anthropic API | HTTPS | LLM inference when an agent uses the Anthropic provider |
 | Agent Service | DeepSeek API | HTTPS | LLM inference when an agent uses the DeepSeek provider |
 | Agent Service | Ollama | Local HTTP | Local LLM inference when an agent uses the Ollama provider |
+| Agent Service | CompanyBook.BG API | HTTPS | Bulgarian registry lookup before importing partners into Business |
 | Knowledge Base | OpenAI API | HTTPS | Text embedding (`text-embedding-3-small`, 1536-dim) |
 | Frontend | Google OAuth (GCP) | HTTPS | Google sign-in flow via NextAuth |
 
@@ -272,8 +294,8 @@ Services that reach outside the Docker network.
 A quick-reference for each service: what it needs to start, what it talks to at runtime, and what data it owns.
 
 ### API Gateway
-- **Startup requires:** Redis (healthy), Auth (started)
-- **Runtime dependencies:** Redis (rate limiting), all 4 application services (proxy targets)
+- **Startup requires:** Redis (healthy), Auth (started), Business (started)
+- **Runtime dependencies:** Redis (rate limiting), all 5 application services (proxy targets)
 - **Data owned:** none (stateless proxy)
 
 ### Auth Service
@@ -284,13 +306,19 @@ A quick-reference for each service: what it needs to start, what it talks to at 
 
 ### Agent Service
 - **Startup requires:** MongoDB (healthy)
-- **Runtime dependencies:** MongoDB, Knowledge Base Service during `rag_search`, LLM providers
-- **Data owned:** `agents`, `conversations`, `invoices`, `expenses`, and invoice `counters` collections
+- **Runtime dependencies:** MongoDB, Business Service during financial/partner tool execution and company validation, Knowledge Base Service during `rag_search`, LLM providers
+- **Data owned:** `agents` and `conversations` collections
 - **External:** OpenAI API, Anthropic API, DeepSeek API, or local Ollama depending on agent config
+
+### Business Service
+- **Startup requires:** MongoDB (healthy)
+- **Runtime dependencies:** MongoDB
+- **Data owned:** `companies`, `partners`, `invoices`, `expenses`, and `counters` collections
+- **External:** none
 
 ### Knowledge Base Service
 - **Startup requires:** MongoDB (healthy), ChromaDB (started)
-- **Runtime dependencies:** MongoDB, ChromaDB, OpenAI (embedding)
+- **Runtime dependencies:** MongoDB, ChromaDB, OpenAI (embedding); Business Service is the Phase 5 validation target for company ownership
 - **Data owned:** `documents` collection (MongoDB) + ChromaDB collections (`global_tax`, `user_{id}`)
 - **External:** OpenAI API (embeddings only)
 

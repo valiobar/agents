@@ -9,6 +9,14 @@ class Settings(BaseSettings):
     db_name: str = "agents"
 
     knowledge_service_url: str = "http://knowledge:8003"
+    business_service_url: str = Field(
+        default="http://business:8005",
+        validation_alias="BUSINESS_SERVICE_URL",
+    )
+    business_timeout_seconds: float = Field(
+        default=15.0,
+        validation_alias="BUSINESS_TIMEOUT_SECONDS",
+    )
 
     openai_api_key: str = ""
     openai_chat_model: str = "gpt-5-mini"

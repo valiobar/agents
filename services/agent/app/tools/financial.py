@@ -6,8 +6,8 @@ import json
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, field_validator
-from pymongo.errors import DuplicateKeyError
 
+from app.clients.business import BusinessClientError
 from app.models.company import CompanyInDB
 from app.models.financial import (
     ExpenseCreate,
@@ -161,7 +161,7 @@ async def _resolve_existing_partner_by_registration_number(
     registration_number: str,
     context: ToolContext,
 ) -> PartnerInDB | None:
-    matches = await context.partner_service.list_partners(
+    matches = await context.business_client.list_partners(
         user_id=user_id,
         company_id=company_id,
         kind=None,
@@ -184,14 +184,19 @@ async def _create_or_resolve_partner(
     context: ToolContext,
 ) -> PartnerInDB | str:
     try:
-        return await context.partner_service.create_partner(user_id, payload)
-    except DuplicateKeyError:
-        existing = await _resolve_existing_partner_by_registration_number(
-            user_id=user_id,
-            company_id=company_id,
-            registration_number=payload.registration_number,
-            context=context,
-        )
+        return await context.business_client.create_partner(user_id, payload)
+    except BusinessClientError as exc:
+        if exc.status_code != 409:
+            return exc.message
+        try:
+            existing = await _resolve_existing_partner_by_registration_number(
+                user_id=user_id,
+                company_id=company_id,
+                registration_number=payload.registration_number,
+                context=context,
+            )
+        except BusinessClientError as resolve_exc:
+            return resolve_exc.message
         if existing is not None:
             return existing
         return _json(
@@ -208,14 +213,20 @@ async def _create_or_resolve_partner(
 def build_company_tools(user_id: str, context: ToolContext) -> list[StructuredTool]:
     async def list_companies(**kwargs) -> str:
         args = ListCompaniesArgs.model_validate(kwargs)
-        companies = await context.company_service.list_companies(user_id, limit=args.limit, offset=0)
+        try:
+            companies = await context.business_client.list_companies(user_id, limit=args.limit, offset=0)
+        except BusinessClientError as exc:
+            return exc.message
         if args.query:
             companies = [company for company in companies if _company_matches(company, args.query)]
         return _json([_company_payload(company) for company in companies])
 
     async def resolve_company_by_name(**kwargs) -> str:
         args = ResolveCompanyArgs.model_validate(kwargs)
-        companies = await context.company_service.list_companies(user_id, limit=100, offset=0)
+        try:
+            companies = await context.business_client.list_companies(user_id, limit=100, offset=0)
+        except BusinessClientError as exc:
+            return exc.message
         exact_matches = [
             company
             for company in companies
@@ -329,14 +340,17 @@ def build_partner_tools(
         args = SearchPartnersArgs.model_validate(kwargs)
 
         async def run(target_company_id: str) -> str:
-            partners = await context.partner_service.list_partners(
-                user_id=user_id,
-                company_id=target_company_id,
-                kind=args.kind,
-                query=args.query,
-                limit=args.limit,
-                offset=0,
-            )
+            try:
+                partners = await context.business_client.list_partners(
+                    user_id=user_id,
+                    company_id=target_company_id,
+                    kind=args.kind,
+                    query=args.query,
+                    limit=args.limit,
+                    offset=0,
+                )
+            except BusinessClientError as exc:
+                return exc.message
             return _json([partner.model_dump(mode="json") for partner in partners])
 
         return await _with_scoped_company(company_id, args.company_id, "searching partners", run)
@@ -345,14 +359,17 @@ def build_partner_tools(
         args = ResolvePartnerArgs.model_validate(kwargs)
 
         async def run(target_company_id: str) -> str:
-            partners = await context.partner_service.list_partners(
-                user_id=user_id,
-                company_id=target_company_id,
-                kind=args.kind,
-                query=args.name,
-                limit=args.max_matches,
-                offset=0,
-            )
+            try:
+                partners = await context.business_client.list_partners(
+                    user_id=user_id,
+                    company_id=target_company_id,
+                    kind=args.kind,
+                    query=args.name,
+                    limit=args.max_matches,
+                    offset=0,
+                )
+            except BusinessClientError as exc:
+                return exc.message
             if not partners:
                 return (
                     f"No partner matching '{args.name}' was found. "
@@ -373,11 +390,14 @@ def build_partner_tools(
         args = GetPartnerArgs.model_validate(kwargs)
 
         async def run(target_company_id: str) -> str:
-            partner = await context.partner_service.get_partner(
-                user_id=user_id,
-                company_id=target_company_id,
-                partner_id=args.partner_id,
-            )
+            try:
+                partner = await context.business_client.get_partner(
+                    user_id=user_id,
+                    company_id=target_company_id,
+                    partner_id=args.partner_id,
+                )
+            except BusinessClientError as exc:
+                return exc.message
             return _json(partner.model_dump(mode="json"))
 
         return await _with_scoped_company(company_id, args.company_id, "loading partners", run)
@@ -434,23 +454,29 @@ def build_financial_tools(user_id: str, company_id: str | None, context: ToolCon
         if target_company_id is not None:
             filters_data["company_id"] = target_company_id
         filters = InvoiceFilters.model_validate(filters_data)
-        invoices = await context.invoice_service.list_invoices(
-            user_id,
-            filters,
-            limit=args.limit,
-            offset=0,
-        )
+        try:
+            invoices = await context.business_client.list_invoices(
+                user_id,
+                filters,
+                limit=args.limit,
+                offset=0,
+            )
+        except BusinessClientError as exc:
+            return exc.message
         return _json([item.model_dump(mode="json") for item in invoices])
 
     async def query_expenses(**kwargs) -> str:
         args = QueryExpensesArgs.model_validate(kwargs)
         filters = ExpenseFilters.model_validate(args.model_dump(exclude={"limit"}))
-        expenses = await context.expense_service.list_expenses(
-            user_id,
-            filters,
-            limit=args.limit,
-            offset=0,
-        )
+        try:
+            expenses = await context.business_client.list_expenses(
+                user_id,
+                filters,
+                limit=args.limit,
+                offset=0,
+            )
+        except BusinessClientError as exc:
+            return exc.message
         return _json([item.model_dump(mode="json") for item in expenses])
 
     async def get_financial_summary(**kwargs) -> str:
@@ -465,7 +491,10 @@ def build_financial_tools(user_id: str, company_id: str | None, context: ToolCon
         if target_company_id is not None:
             request_data["company_id"] = target_company_id
         request = FinancialSummaryRequest.model_validate(request_data)
-        summary = await context.summary_service.get_summary(user_id, request)
+        try:
+            summary = await context.business_client.get_financial_summary(user_id, request)
+        except BusinessClientError as exc:
+            return exc.message
         return _json(summary.model_dump(mode="json"))
 
     async def create_invoice(**kwargs) -> str:
@@ -482,7 +511,10 @@ def build_financial_tools(user_id: str, company_id: str | None, context: ToolCon
                         "invoice_draft": payload.model_dump(mode="json"),
                     }
                 )
-            invoice = await context.invoice_service.create_invoice(user_id, payload)
+            try:
+                invoice = await context.business_client.create_invoice(user_id, payload)
+            except BusinessClientError as exc:
+                return exc.message
             return _json(invoice.model_dump(mode="json"))
 
         return await _with_scoped_company(company_id, args.company_id, "creating invoices", run)
@@ -495,7 +527,10 @@ def build_financial_tools(user_id: str, company_id: str | None, context: ToolCon
                 "Summarize the expense and ask the user to confirm."
             )
         payload = ExpenseCreate.model_validate(args.model_dump(exclude={"confirmed"}))
-        expense = await context.expense_service.create_expense(user_id, payload)
+        try:
+            expense = await context.business_client.create_expense(user_id, payload)
+        except BusinessClientError as exc:
+            return exc.message
         return _json(expense.model_dump(mode="json"))
 
     return [

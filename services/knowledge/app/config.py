@@ -5,7 +5,7 @@ class Settings(BaseSettings):
     mongodb_url: str = "mongodb://mongodb:27017"
     db_name: str = "agents"
 
-    agent_service_url: str = "http://agent:8002"
+    business_service_url: str = "http://business:8005"
 
     chromadb_host: str = "chromadb"
     chromadb_port: int = 8000

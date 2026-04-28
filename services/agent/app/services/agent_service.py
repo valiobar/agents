@@ -4,10 +4,10 @@ from typing import cast
 
 from fastapi import HTTPException, status
 
+from app.clients.business import BusinessClient, BusinessClientError
 from app.config import Settings, settings
 from app.models.agent import AgentConfig, AgentCreate, AgentInDB, AgentUpdate, ProviderName
 from app.repositories.agent_repo import AgentRepository
-from app.repositories.company_repo import CompanyRepository
 
 _AGENT_NOT_FOUND_DETAIL = "Agent not found"
 _VALID_PROVIDERS = frozenset({"openai", "anthropic", "deepseek", "ollama"})
@@ -38,14 +38,23 @@ def _normalize_create_config(payload: AgentCreate, s: Settings) -> AgentConfig:
 
 
 class AgentService:
-    def __init__(self, repo: AgentRepository, company_repo: CompanyRepository) -> None:
+    def __init__(self, repo: AgentRepository, business_client: BusinessClient) -> None:
         self.repo = repo
-        self.company_repo = company_repo
+        self.business_client = business_client
 
     async def _validate_company(self, user_id: str, company_id: str | None) -> None:
         if company_id is None:
             return
-        if await self.company_repo.get_by_id(user_id, company_id) is None:
+        try:
+            exists = await self.business_client.company_exists(user_id, company_id)
+        except BusinessClientError as exc:
+            if exc.status_code == status.HTTP_404_NOT_FOUND:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found") from exc
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=exc.message,
+            ) from exc
+        if not exists:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
 
     async def create_agent(self, user_id: str, payload: AgentCreate) -> AgentInDB:

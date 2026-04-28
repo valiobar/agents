@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from app.clients.agent_service import AgentServiceClient
 from app.adapters.chroma import ChromaAdapter
+from app.clients.business import BusinessServiceClient
 from app.config import settings
 from app.errors import DocumentNotFoundError, EmptyDocumentError, UploadTooLargeError
 from app.embeddings.provider import EmbeddingProvider
@@ -17,12 +17,12 @@ class IngestionService:
         documents: DocumentRepository,
         vector_store: ChromaAdapter,
         embeddings: EmbeddingProvider,
-        agent_service: AgentServiceClient,
+        business_service: BusinessServiceClient,
     ) -> None:
         self.documents = documents
         self.vector_store = vector_store
         self.embeddings = embeddings
-        self.agent_service = agent_service
+        self.business_service = business_service
 
     async def ingest_upload(
         self,
@@ -37,7 +37,7 @@ class IngestionService:
         if content_type not in settings.allowed_content_types:
             raise UnsupportedDocumentTypeError(content_type)
 
-        await self.agent_service.require_company(user_id, company_id)
+        await self.business_service.require_company(user_id, company_id)
         content_hash = compute_sha256(content)
         existing = await self.documents.find_by_hash(user_id, company_id, content_hash)
         if existing:
@@ -114,7 +114,7 @@ class IngestionService:
         if content_type not in settings.allowed_content_types:
             raise UnsupportedDocumentTypeError(content_type)
 
-        await self.agent_service.require_company(user_id, company_id)
+        await self.business_service.require_company(user_id, company_id)
         existing = await self.documents.get_by_id(document_id, user_id)
         if not existing:
             raise DocumentNotFoundError(document_id)

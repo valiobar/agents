@@ -13,6 +13,8 @@ Source:
 
 MongoDB stores document metadata only. Raw uploaded file bytes are not persisted.
 
+`company_id` references the Business-owned `companies` collection. Knowledge owns document metadata and vector chunks, but it validates company ownership through Business before accepting company-scoped writes or retrieval.
+
 ```json
 {
   "_id": "ObjectId",

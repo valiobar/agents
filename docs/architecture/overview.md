@@ -1,14 +1,14 @@
 # Architecture Overview
 
-A microservice platform for creating and orchestrating AI agents. Users log in, create agents (starting with an Accountant Agent), and interact with them through a chat interface. Agents have access to a tax regulation knowledge base, user-uploaded documents, and structured financial data (invoices, expenses). The system is designed so that new agent types can be added as independent modules and, in the future, collaborate on complex tasks.
+A microservice platform for creating and orchestrating AI agents. Users log in, create agents (starting with an Accountant Agent), and interact with them through a chat interface. Agents have access to a tax regulation knowledge base, user-uploaded documents, and structured business data (companies, partners, invoices, expenses) through the Business Service. The system is designed so that new agent types can be added as independent modules and, in the future, collaborate on complex tasks.
 
 ## Current Implementation Status
 
 > **Phase 1 complete** — Infrastructure, Auth Service, and API Gateway are fully implemented.
 > **Phase 2 Knowledge Base complete** — document ingestion, MongoDB metadata, ChromaDB vectors, OpenAI embeddings, and retrieval are implemented.
 > **Phase 3 Agent Service core complete** — agent CRUD, conversation persistence, provider factory, Accountant Agent runtime, RAG tool, calculator tool, and SSE chat streaming are implemented.
-> **Phase 4 Financial Data Layer complete** — invoice/expense models, repositories, REST APIs, MongoDB indexes, financial summary aggregation, and Accountant Agent financial tools are implemented.
-> **Company-scoped financial workflows complete** — Agent Service owns companies and partners, agents and invoices can be scoped by company, invoices snapshot supplier/recipient parties, Knowledge Base user uploads/retrieval are company-scoped, and the Accountant Agent can import Bulgarian partners from CompanyBook.BG before invoice creation.
+> **Business Service split active** — companies, partners, invoices, expenses, financial summaries, and their MongoDB indexes are owned by the Business Service. Gateway keeps the public URLs stable while routing `/companies`, `/partners`, `/invoices`, and `/expenses` to Business.
+> **Company-scoped workflows complete** — Business owns companies and partners; agents, invoices, expenses, and document uploads can be scoped by company; invoices snapshot supplier/recipient parties; Knowledge Base user uploads/retrieval are company-scoped; and the Accountant Agent can import Bulgarian partners from CompanyBook.BG before invoice creation.
 > Remaining Orchestrator work is planned. Features marked with *(planned)* are not yet built.
 
 | Component | Status |
@@ -17,7 +17,8 @@ A microservice platform for creating and orchestrating AI agents. Users log in, 
 | Auth Service (register, login, Google OAuth, JWT, refresh) | ✅ Implemented |
 | API Gateway (JWT, rate limiting, SSE proxy) | ✅ Implemented |
 | Agent Service Core (CRUD, chat, providers, RAG/calculator tools) | ✅ Implemented |
-| Agent Financial Tools (invoice/expense APIs and tools) | ✅ Implemented |
+| Business Service (companies, partners, invoices, expenses, summaries) | ✅ Implemented |
+| Agent Financial Tools (Business-backed invoice/expense tools) | ✅ Implemented |
 | Knowledge Base Service | ✅ Implemented |
 | Orchestrator Service | ⬜ Stub only (health endpoint) |
 | Frontend (Next.js) | ✅ Implemented |
@@ -38,6 +39,7 @@ graph TD
     subgraph services [Core Microservices]
         AuthSvc[Auth Service]
         AgentSvc[Agent Service Core]
+        BusinessSvc[Business Service]
         KBSvc[Knowledge Base Service]
         OrchestratorSvc[Orchestrator Service *(planned)*]
     end
@@ -62,6 +64,7 @@ graph TD
     UI --> GW
     GW --> AuthSvc
     GW --> AgentSvc
+    GW --> BusinessSvc
     GW --> KBSvc
     GW --> OrchestratorSvc
     AgentSvc --> LangChain
@@ -71,9 +74,10 @@ graph TD
     LangChain --> CompanyBookTool
     LangChain --> CalcTool
     RAGTool --> KBSvc
-    DBQueryTool --> MongoDB
-    DBWriteTool --> MongoDB
+    DBQueryTool --> BusinessSvc
+    DBWriteTool --> BusinessSvc
     CompanyBookTool --> CompanyBookAPI[CompanyBook.BG API]
+    BusinessSvc --> MongoDB
     KBSvc --> ChromaDB
     KBSvc --> MongoDB
     AuthSvc --> MongoDB
@@ -90,10 +94,11 @@ graph TD
 | Frontend | Next.js 14, App Router, Tailwind, shadcn/ui | 3000 | Web app, auth UI, dashboard, chat, invoice/expense forms |
 | API Gateway | FastAPI (Python) | 8000 | JWT validation, routing, rate limiting, SSE pass-through |
 | Auth Service | FastAPI (Python) | 8001 | Registration, login, Google OAuth callback, JWT issuance |
-| Agent Service | FastAPI + LangChain (Python) | 8002 | Company/partner ownership, Agent CRUD, Accountant Agent runtime, SSE chat, RAG/calculator/financial/CompanyBook tools, conversation management, invoice and expense APIs |
+| Agent Service | FastAPI + LangChain (Python) | 8002 | Agent CRUD, conversation management, Accountant Agent runtime, SSE chat, provider selection, RAG/calculator/financial/CompanyBook tool orchestration |
 | Knowledge Base Service | FastAPI (Python) | 8003 | Document ingestion, ChromaDB management, RAG retrieval |
 | Orchestrator Service *(planned)* | FastAPI (Python) | 8004 | Multi-agent coordination via Redis Streams (stub in Phase 1) |
-| MongoDB | -- | 27017 | Structured data: users, agents, invoices, expenses, conversations, document metadata |
+| Business Service | FastAPI (Python) | 8005 | Company, partner, invoice, expense, and financial summary APIs and rules |
+| MongoDB | -- | 27017 | Structured data: users, agents, conversations, business records, document metadata |
 | Redis | -- | 6379 | Rate limiting, caching (Phase 1); Redis Streams for inter-agent messaging (Phase 2+) |
 | ChromaDB | -- | 8000 internal | Vector embeddings for tax regulations and user documents |
 
@@ -101,13 +106,29 @@ graph TD
 
 All traffic from the frontend enters through the API Gateway. The gateway validates the JWT, checks the rate limit against Redis, then proxies the request to the appropriate internal service. Internal services are not exposed to the host -- only the frontend and gateway are.
 
+## Business Service Boundary
+
+The Business Service split is active. Gateway preserves the public API shape but routes domain prefixes to Business, while Agent keeps runtime prefixes:
+
+- Business Service owns `/companies`, `/partners`, `/invoices`, `/expenses`, internal `/financial-summary`, and the MongoDB indexes for those collections.
+- Agent Service owns `/agents`, `/conversations`, SSE chat streaming, provider selection, RAG adapter usage, CompanyBook lookup orchestration, and tool orchestration.
+- Gateway owns prefix routing only; it must not gain domain logic.
+- Agent tools call Business over internal HTTP through a long-lived `httpx.AsyncClient`, so REST APIs and chat tools share the same Business validation and persistence rules.
+
+Smoke checks for this boundary are:
+
+- Gateway health remains reachable through `GET http://localhost:8000/health`.
+- Business health responds inside the Docker network at `GET http://business:8005/health`.
+- `GET /companies` through the gateway keeps the same response contract while routing to Business.
+- An Agent chat prompt that invokes `query_expenses` or `get_financial_summary` works through Agent -> Business.
+
 ## Company Scope
 
-The Agent Service owns `companies` and `partners`. A company is scoped by the gateway-injected `x-user-id`; partners are scoped by `user_id + company_id`. Agents may be assigned to a company, invoices require a company for new records, and invoice creation validates that any selected partner belongs to the same company. Invoices persist `supplier_snapshot` and `recipient_snapshot` so historical PDF rendering is stable even if company or partner records change later.
+The Business Service owns `companies` and `partners`. A company is scoped by the gateway-injected `x-user-id`; partners are scoped by `user_id + company_id`. Agents may be assigned to a company, invoices require a company for new records, and invoice creation validates that any selected partner belongs to the same company. Invoices persist `supplier_snapshot` and `recipient_snapshot` so historical PDF rendering is stable even if company or partner records change later.
 
 Agent chat history is also company-scoped. Conversations persist the agent's `company_id` when created, and the frontend loads the latest history by `agent_id + company_id` so reusing one agent across companies does not mix chat context.
 
-The Knowledge Base Service owns document metadata and ChromaDB writes, but validates `company_id` ownership by calling the Agent Service internal `GET /companies/{company_id}/exists` endpoint with `x-user-id`. Uploaded document metadata and uploaded chunk metadata include `company_id`, and `/retrieve` filters user-uploaded chunks by the requested company while keeping `global_tax` shared.
+The Knowledge Base Service owns document metadata and ChromaDB writes. It validates company ownership through Business internal `GET /companies/{company_id}/exists` with `x-user-id`. Uploaded document metadata and uploaded chunk metadata include `company_id`, and `/retrieve` filters user-uploaded chunks by the requested company while keeping `global_tax` shared.
 
 ```mermaid
 sequenceDiagram
@@ -165,7 +186,7 @@ sequenceDiagram
 
 ## Two Data Paths
 
-The Agent Service runtime works with unstructured knowledge through `rag_search`, simple arithmetic through `calculator`, and structured financial data through invoice and expense tools.
+The Agent Service runtime works with unstructured knowledge through `rag_search`, simple arithmetic through `calculator`, and structured business data through Business-backed invoice, expense, partner, and summary tools.
 
 ```mermaid
 graph TD
@@ -174,34 +195,40 @@ graph TD
         UserDocs[User-Uploaded Documents]
     end
 
-    subgraph structured [MongoDB -- Structured Financial Data]
+    subgraph structured [Business Service -- Structured Business Data]
+        Companies[companies]
+        Partners[partners]
         Invoices[invoices]
         Expenses[expenses]
     end
 
     subgraph tools [Agent Tools]
         rag_search
+        search_partners
         query_invoices
         query_expenses
         get_financial_summary
         create_invoice
+        import_companybook_partner
         record_expense
         calculator
     end
 
     unstructured --> rag_search
+    structured --> search_partners
     structured --> query_invoices
     structured --> query_expenses
     structured --> get_financial_summary
-    create_invoice --> Invoices
-    record_expense --> Expenses
+    import_companybook_partner --> Partners
+    create_invoice --> structured
+    record_expense --> structured
 ```
 
 **Unstructured data** (tax regulations, company policies) is stored as vector embeddings in ChromaDB by the implemented Knowledge Base Service. The Agent Service queries it through `POST /retrieve` when the model invokes `rag_search`. Assigned agents include their `company_id` so uploaded-document results come only from that company; unassigned agents still use shared `global_tax` context.
 
-**Structured financial data** (companies, partners, agents, invoices, expenses) is stored in MongoDB by the Agent Service. The Accountant Agent can query invoices and expenses, summarize totals, search/create partners, import Bulgarian partners from CompanyBook.BG, create invoices, and record expenses through tools that reuse the same services as REST endpoints.
+**Structured business data** (companies, partners, invoices, expenses, financial summaries) is stored in MongoDB by the Business Service. The Accountant Agent can query invoices and expenses, summarize totals, search/create partners, import Bulgarian partners from CompanyBook.BG, create invoices, and record expenses through tools that call Business over internal HTTP.
 
-Financial write tools require explicit user confirmation before creating records. Tool code calls services, not repositories, so REST and chat behavior share validation, calculations, and user scoping.
+Financial write tools require explicit user confirmation before creating records. Tool code calls `BusinessClient`, not repositories, so REST and chat behavior share Business validation, calculations, and user scoping without duplicating ownership inside Agent.
 
 CompanyBook.BG is an external registry integration owned by the Agent Service runtime. The frontend does not call it directly. `search_companybook_companies` returns read-only registry candidates, and `import_companybook_partner` maps a selected UIC into the existing company-scoped partner model before invoices use the normal `partner_id` workflow. Configure it with `COMPANYBOOK_API_KEY`, optional `COMPANYBOOK_BASE_URL`, and `COMPANYBOOK_TIMEOUT_SECONDS`; missing keys, API quota errors, and incomplete registry fields are returned as user-safe tool messages.
 
@@ -329,6 +356,7 @@ auth            :8001   (internal)
 agent           :8002   (internal)
 knowledge       :8003   (internal)
 orchestrator    :8004   (internal)
+business        :8005   (internal)
 mongodb         :27017  (internal)
 redis           :6379   (internal)
 chromadb        :8000   (internal)
@@ -358,7 +386,8 @@ The Knowledge Base Service is the only consumer. It handles the full document li
 Stores all structured data across services:
 
 - `users` -- Auth Service
-- `companies`, `partners`, `agents`, `invoices`, `expenses`, `conversations` -- Agent Service
+- `agents`, `conversations` -- Agent Service
+- `companies`, `partners`, `invoices`, `expenses`, `counters` -- Business Service
 - `documents` -- Knowledge Base Service (metadata only; vectors are in ChromaDB)
 
 ---
@@ -385,6 +414,11 @@ Stores all structured data across services:
 ### Phase 4
 - Invoice and expense schemas, APIs, repositories, MongoDB indexes, financial summary aggregation, and LangChain tools
 - Company and partner ownership, company-scoped agents/invoices/documents, invoice party snapshots, and Bulgarian invoice PDF fields
+
+### Business Service Split
+- Business Service owns companies, partners, invoices, expenses, financial summaries, and related MongoDB indexes on internal port 8005
+- Gateway routes `/companies`, `/partners`, `/invoices`, and `/expenses` to Business while keeping `/agents` and `/conversations` on Agent
+- Agent financial and partner tools call Business through `BusinessClient` instead of in-process domain repositories/services
 
 ### Later Phases
 - Orchestrator Service activated with Redis Streams

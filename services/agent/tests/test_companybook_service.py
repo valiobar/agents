@@ -8,10 +8,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from pymongo.errors import DuplicateKeyError
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.clients.business import BusinessClientError
 from app.models.companybook import CompanyBookCompanyDetail
 from app.models.partner import PartnerInDB
 from app.tools.companybook import (
@@ -39,7 +38,7 @@ def _partner(registration_number: str = "123456789") -> PartnerInDB:
     )
 
 
-class FakePartnerService:
+class FakeBusinessClient:
     def __init__(self, existing: list[PartnerInDB] | None = None, duplicate: bool = False) -> None:
         self.existing = existing or []
         self.duplicate = duplicate
@@ -62,7 +61,7 @@ class FakePartnerService:
         self.create_calls += 1
         if self.duplicate:
             self.existing = [_partner(getattr(payload, "registration_number"))]
-            raise DuplicateKeyError("duplicate partner")
+            raise BusinessClientError("Partner already exists.", status_code=409)
         return _partner(getattr(payload, "registration_number"))
 
 
@@ -81,9 +80,9 @@ class FakeCompanyBookService:
 
 class CompanyBookToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_import_reuses_existing_partner_by_exact_uic(self) -> None:
-        partner_service = FakePartnerService(existing=[_partner()])
+        business_client = FakeBusinessClient(existing=[_partner()])
         context = SimpleNamespace(
-            partner_service=partner_service,
+            business_client=business_client,
             companybook_service=FakeCompanyBookService(),
         )
 
@@ -95,12 +94,12 @@ class CompanyBookToolTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(json.loads(result)["id"], "partner-1")
-        self.assertEqual(partner_service.create_calls, 0)
+        self.assertEqual(business_client.create_calls, 0)
 
     async def test_import_resolves_partner_after_duplicate_key_race(self) -> None:
-        partner_service = FakePartnerService(duplicate=True)
+        business_client = FakeBusinessClient(duplicate=True)
         context = SimpleNamespace(
-            partner_service=partner_service,
+            business_client=business_client,
             companybook_service=FakeCompanyBookService(),
         )
 
@@ -112,7 +111,7 @@ class CompanyBookToolTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(json.loads(result)["registration_number"], "123456789")
-        self.assertEqual(partner_service.create_calls, 1)
+        self.assertEqual(business_client.create_calls, 1)
 
 
 if __name__ == "__main__":

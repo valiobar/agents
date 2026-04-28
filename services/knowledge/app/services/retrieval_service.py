@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import HTTPException
 
 from app.adapters.chroma import ChromaAdapter
-from app.clients.agent_service import AgentServiceClient
+from app.clients.business import BusinessServiceClient
 from app.embeddings.provider import EmbeddingProvider
 from app.models.retrieval import RetrievalRequest, RetrievalResponse
 
@@ -13,11 +13,11 @@ class RetrievalService:
         self,
         vector_store: ChromaAdapter,
         embeddings: EmbeddingProvider,
-        agent_service: AgentServiceClient,
+        business_service: BusinessServiceClient,
     ) -> None:
         self.vector_store = vector_store
         self.embeddings = embeddings
-        self.agent_service = agent_service
+        self.business_service = business_service
 
     async def retrieve(self, request: RetrievalRequest, user_id_from_header: str | None) -> RetrievalResponse:
         user_id = request.user_id or user_id_from_header
@@ -42,7 +42,7 @@ class RetrievalService:
                 raise HTTPException(status_code=422, detail="user_id is required for user document retrieval")
 
             if request.company_id:
-                await self.agent_service.require_company(user_id, request.company_id)
+                await self.business_service.require_company(user_id, request.company_id)
                 where = dict(request.filters)
                 where["company_id"] = request.company_id
             else:

@@ -8,14 +8,14 @@ from app.config import settings
 
 router = APIRouter()
 
+# Business-owned domain APIs keep their public URLs but route to Business.
+BUSINESS_DOMAIN_PREFIXES = ("/companies", "/partners", "/invoices", "/expenses")
+AGENT_RUNTIME_PREFIXES = ("/agents", "/conversations")
+
 SERVICE_MAP: dict[str, str] = {
     "/auth": settings.auth_service_url,
-    "/companies": settings.agent_service_url,
-    "/partners": settings.agent_service_url,
-    "/agents": settings.agent_service_url,
-    "/conversations": settings.agent_service_url,
-    "/invoices": settings.agent_service_url,
-    "/expenses": settings.agent_service_url,
+    **{prefix: settings.business_service_url for prefix in BUSINESS_DOMAIN_PREFIXES},
+    **{prefix: settings.agent_service_url for prefix in AGENT_RUNTIME_PREFIXES},
     "/documents": settings.knowledge_service_url,
     "/retrieve": settings.knowledge_service_url,
     "/orchestrator": settings.orchestrator_service_url,

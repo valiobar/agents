@@ -1,10 +1,11 @@
 from contextlib import asynccontextmanager
 import logging
 
+import httpx
 from fastapi import FastAPI
 
 from app.config import settings
-from app.routes import agents, companies, conversations, expenses, invoices, partners
+from app.routes import agents, conversations
 from app.utils.db import close_db, connect_db
 
 
@@ -23,17 +24,20 @@ _configure_logging()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_db()
-    yield
-    close_db()
+    app.state.business_http = httpx.AsyncClient(
+        base_url=settings.business_service_url,
+        timeout=settings.business_timeout_seconds,
+    )
+    try:
+        yield
+    finally:
+        await app.state.business_http.aclose()
+        close_db()
 
 
 app = FastAPI(title="Agent Service", version="1.0.0", lifespan=lifespan)
 app.include_router(agents.router)
-app.include_router(companies.router)
 app.include_router(conversations.router)
-app.include_router(invoices.router)
-app.include_router(expenses.router)
-app.include_router(partners.router)
 
 
 @app.get("/health")

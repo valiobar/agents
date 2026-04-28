@@ -2,75 +2,76 @@
 
 ## Current State
 
-The Agent Service implements authenticated company and partner management, company-aware Agent CRUD, MongoDB-backed conversation persistence, Accountant Agent runtime, multi-provider LLM factory, RAG search, calculator tooling, financial invoice/expense APIs, financial LangChain tools, and SSE chat streaming through the API Gateway.
+The Agent Service owns user-created agents, MongoDB-backed conversation persistence, Accountant Agent runtime, multi-provider LLM factory, RAG search, calculator/date tooling, Business-backed financial and partner LangChain tools, and SSE chat streaming through the API Gateway.
 
 ## Responsibility
 
 The Agent Service owns user-created agents and persisted chat history. It receives authenticated user context from the gateway through `x-user-id`; it does not decode JWTs directly.
 
+### Business Split Baseline
+
+The Business Service split is active. Public `/companies`, `/partners`, `/invoices`, and `/expenses` URLs still exist at the gateway, but the gateway routes those prefixes to Business Service. Agent exposes only agent lifecycle, chat, conversation history, and health endpoints.
+
+Runtime guardrails:
+
+- Keep Agent chat and SSE behavior on `/agents` unchanged.
+- Treat company, partner, invoice, expense, and financial summary data as Business-owned.
+- Access Business from Agent only through the long-lived `BusinessClient` HTTP adapter.
+- Verify the split with gateway health, Business health, gateway `GET /companies`, and an Agent chat flow that invokes `query_expenses`.
+
 Implemented responsibilities:
 
 - Agent lifecycle operations: create, list, get, update, and delete.
-- Company lifecycle operations for invoice issuer profiles.
-- Partner lifecycle operations scoped by `user_id + company_id`.
 - Accountant Agent runtime using the Strategy pattern.
 - Provider selection for OpenAI, Anthropic, DeepSeek, and Ollama through a Factory pattern.
 - Chat request orchestration and `text/event-stream` SSE output.
 - Conversation creation and history persistence in MongoDB.
-- Invoice and expense REST APIs with user/company-scoped MongoDB persistence.
-- Financial summary aggregation across invoice and expense records.
 - LangChain `AgentExecutor` orchestration for model-requested tool calls.
 - RAG lookup through the Knowledge Base Service `POST /retrieve` contract.
 - Safe arithmetic through the calculator tool.
-- Structured financial query/write tools for the Accountant Agent.
+- Company validation through Business `GET /companies/{company_id}/exists`.
+- Structured company, partner, invoice, expense, and financial summary tools backed by Business HTTP APIs.
 
 ## Internal Architecture
 
 ```text
 routes/
   agents.py              # Agent CRUD and chat streaming
-  companies.py           # Company issuer profile CRUD
   conversations.py       # Conversation history reads
-  invoices.py            # Invoice create/list/get/update
-  partners.py            # Company-scoped partner CRUD
-  expenses.py            # Expense create/list/get
+clients/
+  business.py            # Business Service HTTP adapter for domain data
 services/
   agent_service.py       # Agent lifecycle business logic
   chat_service.py        # Runtime orchestration, SSE events, persistence
-  company_service.py     # Company ownership and delete protection
   conversation_service.py
-  invoice_service.py     # Invoice calculations and status transitions
-  partner_service.py     # Partner ownership and invoice delete protection
-  expense_service.py     # Expense calculations and deductible amounts
-  financial_summary_service.py
+  companybook_service.py # CompanyBook.BG external API adapter
 repositories/
   agent_repo.py          # User-scoped agent MongoDB access
-  company_repo.py        # User-scoped company MongoDB access
   conversation_repo.py   # User-scoped conversation MongoDB access
-  invoice_repo.py        # User-scoped invoice MongoDB access
-  partner_repo.py        # Company-scoped partner MongoDB access
-  expense_repo.py        # User-scoped expense MongoDB access
 models/
   agent.py               # Agent config, create/update, response schemas
-  company.py             # Company issuer profile schemas and logo validation
+  company.py             # Business response schemas consumed by tools/client
   conversation.py        # Message and conversation schemas
   chat.py                # Chat request and event schemas
-  financial.py           # Invoice, expense, filter, and summary schemas
-  partner.py             # Partner schemas
+  financial.py           # Business financial schemas consumed by tools/client
+  partner.py             # Business partner schemas consumed by tools/client
+  companybook.py         # CompanyBook response and mapping schemas
 runtime/
   base_agent.py          # Strategy interface and streaming loop
   accountant.py          # Phase 3 concrete agent
   registry.py            # agent_type -> runtime class
-  tool_context.py        # Service bundle injected into LangChain tools
+  tool_context.py        # Business and CompanyBook clients injected into tools
   providers/
     factory.py           # provider -> LangChain provider wrapper
 tools/
   rag.py                 # Knowledge Base Service adapter
   calculator.py          # Safe arithmetic adapter
-  financial.py           # Invoice, expense, and financial summary tools
+  dates.py               # Date helper tool
+  financial.py           # Business-backed company, partner, invoice, expense, and summary tools
+  companybook.py         # CompanyBook search/import tools backed by Business partner writes
 ```
 
-Routes do request/response handling only. Services own orchestration and business rules. Repositories own MongoDB access. Runtime and tools are called by services, not by route handlers.
+Routes do request/response handling only. Services own orchestration and agent-specific business rules. Repositories own Agent MongoDB access. Business-domain persistence and calculations live in Business Service; Agent tools call Business through `BusinessClient`, not through copied repositories or services.
 
 ## API Surface
 
@@ -79,17 +80,6 @@ All client calls go through the API Gateway at `http://localhost:8000`. Internal
 | Route | Status | Purpose |
 |-------|--------|---------|
 | `GET /health` | Implemented | Internal health check |
-| `POST /companies` | Implemented | Create a current-user company profile |
-| `GET /companies?limit=50&offset=0` | Implemented | List current-user companies |
-| `GET /companies/{company_id}` | Implemented | Get one owned company |
-| `PATCH /companies/{company_id}` | Implemented | Update one owned company |
-| `DELETE /companies/{company_id}` | Implemented | Delete an unreferenced owned company |
-| `GET /companies/{company_id}/exists` | Implemented | Internal company ownership validation for Knowledge Service |
-| `POST /partners` | Implemented | Create a partner under an owned company |
-| `GET /partners?company_id=...&kind=...&query=...` | Implemented | List/search partners for one company |
-| `GET /partners/{partner_id}?company_id=...` | Implemented | Get one company-scoped partner |
-| `PATCH /partners/{partner_id}?company_id=...` | Implemented | Update one company-scoped partner |
-| `DELETE /partners/{partner_id}?company_id=...` | Implemented | Delete an unreferenced company-scoped partner |
 | `POST /agents` | Implemented | Create an Accountant Agent, optionally assigned to a company |
 | `GET /agents?company_id=...&limit=50&offset=0` | Implemented | List current user's agents, optionally filtered by company |
 | `GET /agents/{agent_id}` | Implemented | Get one current-user agent |
@@ -97,19 +87,20 @@ All client calls go through the API Gateway at `http://localhost:8000`. Internal
 | `DELETE /agents/{agent_id}` | Implemented | Delete an agent |
 | `POST /agents/{agent_id}/chat` | Implemented | Stream chat response via SSE |
 | `GET /conversations/{conversation_id}` | Implemented | Load persisted conversation history |
-| `POST /invoices` | Implemented | Create an invoice |
-| `GET /invoices?limit=50&offset=0` | Implemented | List current user's invoices |
-| `GET /invoices/{invoice_id}` | Implemented | Get one current-user invoice |
-| `PATCH /invoices/{invoice_id}` | Implemented | Update invoice status, due date, or notes |
-| `POST /expenses` | Implemented | Record an expense |
-| `GET /expenses?limit=50&offset=0` | Implemented | List current user's expenses |
-| `GET /expenses/{expense_id}` | Implemented | Get one current-user expense |
+
+Business-owned public routes are documented under `docs/services/business/`. Gateway keeps their public URLs stable while routing them to Business Service.
 
 ## Companies And Partners
 
-The Agent Service owns the `companies` and `partners` collections. A company represents the invoice issuer profile and is scoped by `user_id`. Partners represent reusable clients, suppliers, or both, and are scoped by `user_id + company_id`.
+The Agent Service no longer owns the `companies` and `partners` collections or REST routes. It consumes company and partner data from Business Service.
 
-Ownership failures intentionally return `404` so callers cannot distinguish "does not exist" from "belongs to another user/company". Company deletes return `409` while agents, invoices, or partners still reference the company. Partner deletes return `409` while invoices reference the partner; existing invoices remain historically correct because they store recipient snapshots.
+Agent create, update, and company-filtered list operations validate non-null `company_id` values through Business `GET /companies/{company_id}/exists`. Business ownership failures are surfaced to Agent callers as `404 Company not found`; Business availability failures become `503`.
+
+Accountant tools use Business-backed company and partner operations:
+
+- `list_companies` and `resolve_company_by_name` read current-user companies.
+- `search_partners`, `resolve_partner_by_name`, `get_partner`, and `create_partner` operate inside a resolved company scope.
+- `import_companybook_partner` searches CompanyBook.BG, then creates or reuses the partner through Business.
 
 Example workflow:
 
@@ -117,34 +108,36 @@ Example workflow:
 2. `POST /partners` creates a recipient under that company.
 3. `POST /agents` may assign an Accountant Agent to the company via `company_id`.
 4. `POST /invoices` requires `company_id` and uses either `partner_id` or full recipient details.
-5. `POST /documents` in the Knowledge Base Service requires the same `company_id` and validates it through Agent Service.
+5. `POST /documents` in the Knowledge Base Service requires the same `company_id` and validates it through Business Service.
+
+Steps 1, 2, and 4 are Business-owned even though they are still reached through the gateway.
 
 ## Financial Records
 
-The Agent Service owns the `invoices`, `expenses`, and invoice `counters` collections. Invoices are scoped by `user_id + company_id` for new records and may reference a `partner_id`; expenses remain user-scoped. Public client traffic reaches these routes through the gateway prefixes `/invoices/*` and `/expenses/*`.
 
-Money values are modeled as Python `Decimal`, stored in MongoDB as BSON `Decimal128`, and serialized in JSON responses as strings to avoid float precision loss. Date-only API fields are accepted as ISO `YYYY-MM-DD` strings and stored as UTC datetimes for range queries.
+Agent keeps the financial Pydantic schemas it needs to validate tool arguments and parse Business responses. Money storage, date normalization, invoice numbering, totals, status transitions, snapshots, and financial summary aggregation are Business Service responsibilities.
 
-Invoice numbers are generated atomically per user/company/year for company-scoped invoices. Invoice totals are calculated server-side from line items:
+Financial tool calls preserve `x-user-id` and pass validated JSON to Business:
 
-- `subtotal = quantity * unit_price`
-- `vat_amount = subtotal * vat_rate`
-- `total = subtotal + vat_amount`
-
-Expense records can be entered as a single `amount` or from optional purchased item lines. If items are present, the service calculates the stored amount from item totals. Deductible expenses store `deductible_amount = amount * deductible_rate`; non-deductible expenses store `0.00`.
-
-Invoice creation persists:
-
-- `supplier_snapshot` from the selected company.
-- `recipient_snapshot` from the selected partner or explicit recipient input.
-- Bulgarian invoice fields including `tax_event_date`, `place_of_supply`, `payment_method`, bank details, `amount_in_words`, `vat_reason`, `recipient_name`, `compiler_name`, `original_label`, and line-item `unit_label`.
+- `GET /companies`
+- `GET /companies/{company_id}/exists`
+- `GET /partners`
+- `GET /partners/{partner_id}`
+- `POST /partners`
+- `GET /invoices`
+- `POST /invoices`
+- `GET /expenses`
+- `POST /expenses`
+- `POST /financial-summary`
 
 ### Accountant Financial Tools
 
-The Accountant Agent has five financial tools:
+The Accountant Agent has Business-backed financial and company tools:
 
 | Tool | Purpose | Key parameters |
 |------|---------|----------------|
+| `list_companies` | List/search current-user companies | `query`, `limit` |
+| `resolve_company_by_name` | Resolve a company name or registration number before company-scoped actions | `name`, `max_matches` |
 | `query_invoices` | Query current-user invoices | `company_id`, `partner_id`, `status`, `date_from`, `date_to`, `counterparty`, `amount_min`, `amount_max`, `category`, `limit` |
 | `query_expenses` | Query current-user expenses | `category`, `counterparty`, `date_from`, `date_to`, `deductible`, `amount_min`, `amount_max`, `limit` |
 | `get_financial_summary` | Summarize invoice and expense totals | `date_from`, `date_to`, `group_by`, `include_invoices`, `include_expenses` |
@@ -152,9 +145,10 @@ The Accountant Agent has five financial tools:
 | `record_expense` | Record an expense after explicit confirmation | Expense create fields plus `confirmed` |
 | `search_partners` | Search partners in the assigned agent company | `query`, `kind`, `limit` |
 | `resolve_partner_by_name` | Resolve a named client/supplier before invoice creation | `name`, `kind`, `max_matches` |
+| `get_partner` | Load one partner before invoice creation or clarification | `partner_id` |
 | `create_partner` | Create a partner in the assigned agent company | Partner create fields |
 
-Write tools refuse to persist data until the model sets `confirmed=true`, which the system prompt instructs it to do only after the user explicitly confirms the summarized record. Partner and financial write tools also refuse when the current agent has no `company_id`; RAG still works for shared `global_tax` in that case.
+Write tools refuse to persist invoices and expenses until the model sets `confirmed=true`, which the system prompt instructs it to do only after the user explicitly confirms the summarized record. Company-scoped partner and invoice tools use the assigned agent company automatically; unassigned agents must resolve and pass `company_id`. RAG still works for shared `global_tax` when an agent has no company.
 
 ### Development Tool Logging
 
@@ -195,8 +189,10 @@ data: {"conversation_id":"665f1f77c9e0f7a8093bb711"}
 | `MONGODB_URL` | `mongodb://mongodb:27017` | MongoDB connection string. |
 | `DB_NAME` | `agents` | Database used by the service. |
 | `KNOWLEDGE_SERVICE_URL` | `http://knowledge:8003` | Internal Knowledge Base Service URL. |
+| `BUSINESS_SERVICE_URL` | `http://business:8005` | Internal Business Service URL used for company validation and financial tools. |
+| `BUSINESS_TIMEOUT_SECONDS` | `15.0` | Per-request timeout for Business Service calls. |
 | `OPENAI_API_KEY` | empty | Required for `provider: "openai"`. |
-| `OPENAI_CHAT_MODEL` | `gpt-4o-mini` | Default OpenAI chat model. |
+| `OPENAI_CHAT_MODEL` | `gpt-5-mini` | Default OpenAI chat model. |
 | `ANTHROPIC_API_KEY` | empty | Required for `provider: "anthropic"`. |
 | `ANTHROPIC_CHAT_MODEL` | `claude-3-5-haiku-latest` | Default Anthropic chat model. |
 | `DEEPSEEK_API_KEY` | empty | Required for `provider: "deepseek"`. |
@@ -206,6 +202,9 @@ data: {"conversation_id":"665f1f77c9e0f7a8093bb711"}
 | `DEFAULT_AGENT_PROVIDER` | `openai` | Provider used when client omits one. |
 | `MAX_HISTORY_MESSAGES` | `20` | Recent conversation messages sent to the runtime. |
 | `RAG_TOP_K` | `5` | Number of chunks requested from Knowledge Base retrieval. |
+| `COMPANYBOOK_API_KEY` | empty | Optional CompanyBook.BG API key; missing values return a tool-level configuration error. |
+| `COMPANYBOOK_BASE_URL` | `https://api.companybook.bg/api` | CompanyBook.BG API base URL. |
+| `COMPANYBOOK_TIMEOUT_SECONDS` | `10.0` | Per-request timeout for CompanyBook calls. |
 
 ## Run And Verify
 
@@ -213,7 +212,7 @@ Start the service with its dependencies:
 
 ```bash
 cp .env.example .env
-docker compose up --build mongodb redis chromadb auth gateway knowledge agent
+docker compose up --build mongodb redis chromadb auth business gateway knowledge agent
 ```
 
 Health checks:
@@ -223,7 +222,7 @@ curl http://localhost:8000/health
 docker compose logs agent
 ```
 
-Create a company, partner, and assigned agent:
+Create a company and partner through the Business-owned gateway routes, then create an assigned agent:
 
 ```bash
 curl -X POST http://localhost:8000/companies \
@@ -269,7 +268,7 @@ curl -N -X POST "http://localhost:8000/agents/$AGENT_ID/chat" \
   -d '{"message":"Calculate 20% VAT on 100 and explain it."}'
 ```
 
-For a new chat, provider and runtime setup happens before the conversation is created. During the turn, `BaseAgent` runs a LangChain `AgentExecutor`; the executor calls `rag_search` or `calculator` when the model requests tools, feeds tool results back to the model, and streams only final user-facing chunks as `token` events.
+For a new chat, provider and runtime setup happens before the conversation is created. During the turn, `BaseAgent` runs a LangChain `AgentExecutor`; the executor calls RAG, calculator/date, Business-backed financial/partner, or CompanyBook tools when the model requests them, feeds tool results back to the model, and streams only final user-facing chunks as `token` events.
 
 Load conversation history:
 
@@ -278,7 +277,7 @@ curl "http://localhost:8000/conversations/$CONVERSATION_ID" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-Create an invoice:
+Create an invoice through the Business-owned gateway route:
 
 ```bash
 curl -X POST http://localhost:8000/invoices \
@@ -306,7 +305,7 @@ curl -X POST http://localhost:8000/invoices \
   }'
 ```
 
-Record an expense:
+Record an expense through the Business-owned gateway route:
 
 ```bash
 curl -X POST http://localhost:8000/expenses \
@@ -331,10 +330,10 @@ curl -X POST http://localhost:8000/expenses \
 | Ollama runtime errors | Local Ollama is not running or model is missing | Start Ollama and pull `OLLAMA_CHAT_MODEL`. |
 | RAG tool reports retrieval failure | Knowledge Base Service, ChromaDB, or embedding provider is unavailable | Start `knowledge` and `chromadb`; verify `/retrieve`. |
 | Partner or invoice tool says the agent needs a company | The agent has `company_id = null` | Assign the agent to a company before using partner or financial write tools. |
-| Company/partner request returns `404` for an existing id | The id belongs to another user/company or the company was not supplied on partner routes | Use the owning user's token and include the matching `company_id`. |
+| Agent create/update returns `404 Company not found` | Business reported the `company_id` does not exist for this user | Use the owning user's token and an owned company id. |
+| Financial or partner tool reports Business unavailable | Business Service is down or unreachable from Agent | Start `business` and verify `BUSINESS_SERVICE_URL`. |
 | Chat creates a conversation but no `done` event | Runtime execution or message persistence failed after conversation creation | Inspect the SSE `error` event and service logs. Provider setup failures happen before new conversation creation. |
-| Invoice status update returns `400` | Invalid status transition, such as `paid` back to `draft` | Use the allowed workflow: `draft -> sent/cancelled`, `sent -> paid/overdue/cancelled`, `overdue -> paid/cancelled`. |
-| Financial request returns `422` | Invalid money/date/category value or missing required invoice/expense fields | Send money values as strings and use supported categories/status values. |
+| Financial tool request returns a validation message | Invalid money/date/category value or missing required invoice/expense fields | Send money values as strings and use supported categories/status values. |
 
 ## Architectural Rules
 
@@ -344,3 +343,4 @@ curl -X POST http://localhost:8000/expenses \
 - Avoid N+1 MongoDB queries; batch with `$in` or aggregation pipelines when expanding data.
 - Add MongoDB indexes for fields used in filters, sorts, and unique constraints.
 - Do not call ChromaDB directly from this service. RAG access goes through the Knowledge Base Service.
+- Do not reintroduce Business-owned repositories, routes, or services into Agent. Use `BusinessClient` for company, partner, invoice, expense, and financial summary operations.

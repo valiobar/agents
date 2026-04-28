@@ -17,6 +17,20 @@ services:
         - action: rebuild
           path: ./services/auth/Dockerfile
 
+  business:
+    volumes:
+      - ./services/business/app:/app/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8005 --reload
+    develop:
+      watch:
+        - action: sync
+          path: ./services/business/app
+          target: /app/app
+        - action: rebuild
+          path: ./services/business/requirements.txt
+        - action: rebuild
+          path: ./services/business/Dockerfile
+
   gateway:
     volumes:
       - ./gateway/app:/app/app

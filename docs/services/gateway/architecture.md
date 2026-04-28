@@ -43,6 +43,30 @@ main.py
 - **Reverse proxy:** gateway forwards requests without domain logic.
 - **SSE pass-through:** streaming responses are not buffered.
 
+## Route Ownership Baseline
+
+Current routing still sends all implemented business-domain APIs to Agent Service. The Business Service split will change only the target service for selected prefixes; public URLs stay stable.
+
+| Prefix | Current target | Target after Business split | Notes |
+|--------|----------------|-----------------------------|-------|
+| `/auth` | Auth Service | Auth Service | Public auth routes remain JWT-skip routes. |
+| `/agents` | Agent Service | Agent Service | Agent CRUD and SSE chat runtime. |
+| `/conversations` | Agent Service | Agent Service | Persisted chat history. |
+| `/companies` | Agent Service | Business Service | Planned domain ownership move. |
+| `/partners` | Agent Service | Business Service | Planned domain ownership move. |
+| `/invoices` | Agent Service | Business Service | Planned domain ownership move. |
+| `/expenses` | Agent Service | Business Service | Planned domain ownership move. |
+| `/documents` | Knowledge Base Service | Knowledge Base Service | Document lifecycle. |
+| `/retrieve` | Knowledge Base Service | Knowledge Base Service | RAG retrieval. |
+| `/orchestrator` | Orchestrator Service | Orchestrator Service | Stub/planned orchestration. |
+
+Smoke checks for the split:
+
+- `GET http://localhost:8000/health` verifies the gateway remains public and healthy.
+- `GET http://business:8005/health` verifies the future Business container inside the Docker network once Phase 1 adds it.
+- `GET http://localhost:8000/companies` verifies the gateway contract before and after the target switch.
+- `POST /agents/{agent_id}/chat` with a prompt that invokes `query_expenses` verifies Agent runtime and tool routing still work.
+
 ## Restrictions
 
 - Do not add business logic to the gateway.

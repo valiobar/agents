@@ -9,9 +9,9 @@ Authorization: Bearer <access_token>
 
 The gateway validates the JWT and injects `x-user-id` before proxying to internal services. Clients should not send `x-user-id` directly.
 
-## Agent Service
+## Business Service
 
-The Agent Service owns companies, partners, user-created agents, Accountant Agent chat runtime, conversation history, financial invoice and expense records, and Accountant Agent tools.
+The Business Service owns companies, partners, invoice and expense records, financial summaries, and the business rules for those records. Public URLs stay unchanged through the API Gateway: `/companies`, `/partners`, `/invoices`, and `/expenses` route to Business.
 
 ### Company And Partner Workflow
 
@@ -47,6 +47,10 @@ curl -X POST http://localhost:8000/partners \
 ```
 
 Partner reads/updates/deletes include `company_id` as a query parameter. Cross-user or cross-company ids return `404`.
+
+## Agent Service
+
+The Agent Service owns user-created agents, Accountant Agent chat runtime, conversation history, provider selection, and tool orchestration. Business-domain tools call the Business Service over internal HTTP, so chat-created invoices, expenses, and partners use the same validation rules as the public Business APIs.
 
 ### Create Agent
 
@@ -197,7 +201,7 @@ Content-Type: application/json
 
 Streams an Accountant Agent response. If `conversation_id` is omitted, the service creates a new conversation for the agent's current `company_id` and emits a `conversation` event before `start`. Provider and runtime setup happen before new conversation creation, so setup failures return an SSE `error` without inserting an empty conversation.
 
-The runtime uses LangChain `AgentExecutor` to execute model-requested `rag_search` and `calculator` tool calls before final response streaming. `done` is emitted only after the user and assistant messages are persisted.
+The runtime uses LangChain `AgentExecutor` to execute model-requested tools before final response streaming. `rag_search` calls Knowledge, financial and partner tools call Business over internal HTTP, and `calculator` runs locally. `done` is emitted only after the user and assistant messages are persisted.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -289,6 +293,19 @@ Response `200 OK`:
   "updated_at": "2026-04-26T10:01:04Z"
 }
 ```
+
+### Agent Service Errors
+
+| Status or event | Typical Cause |
+|-----------------|---------------|
+| `401` | Missing or invalid bearer token at the gateway, or missing `x-user-id` on direct internal calls. |
+| `404` | Agent or conversation does not exist, has an invalid ObjectId, or belongs to another user/company scope. |
+| `422` | Invalid request body, provider name, agent type, message length, config value, or pagination value. |
+| SSE `error` | Provider API key is missing, provider runtime failed, Business or Knowledge tool execution failed, conversation does not match the agent, model execution failed, or message persistence failed. |
+
+## Business Service: Invoices And Expenses
+
+Invoice and expense endpoints are public Gateway routes backed by the Business Service. Agent financial tools call the same Business operations internally through `BusinessClient`.
 
 ### Create Invoice
 
@@ -546,15 +563,23 @@ GET /expenses/{expense_id}
 
 Returns one expense owned by the authenticated user. Missing, invalid, or cross-user IDs return `404`.
 
-### Agent Service Errors
+### Internal Financial Summary
 
-| Status or event | Typical Cause |
-|-----------------|---------------|
+```http
+POST /financial-summary
+Content-Type: application/json
+```
+
+Business exposes this endpoint for internal Agent tool calls at `http://business:8005/financial-summary`. It is not a public Gateway route. The request can filter by `company_id`, `partner_id`, date range, and optional grouping, then returns invoice, expense, and net totals for the authenticated `x-user-id`.
+
+### Business Service Errors
+
+| Status | Typical Cause |
+|--------|---------------|
 | `401` | Missing or invalid bearer token at the gateway, or missing `x-user-id` on direct internal calls. |
 | `400` | Invalid invoice status transition. |
-| `404` | Company, partner, agent, conversation, invoice, or expense does not exist, has an invalid ObjectId, or belongs to another user/company. |
-| `422` | Invalid request body, provider name, agent type, message length, money/date value, category/status, or pagination value. |
-| SSE `error` | Provider API key is missing, provider runtime failed, conversation does not match the agent, model execution failed, or message persistence failed. |
+| `404` | Company, partner, invoice, or expense does not exist, has an invalid ObjectId, or belongs to another user/company. |
+| `422` | Invalid request body, money/date value, category/status, company/partner relationship, or pagination value. |
 
 ## Knowledge Base Service
 
@@ -572,7 +597,7 @@ Uploads and ingests a PDF, text, or Markdown document for one authenticated user
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `file` | file | Yes | Document to ingest. Supported types: `application/pdf`, `text/plain`, `text/markdown`. |
-| `company_id` | string | Yes | Owned company id validated by the Knowledge Base Service through Agent Service. |
+| `company_id` | string | Yes | Owned company id. Business Service is the Phase 5 target for Knowledge Base ownership validation. |
 
 ```bash
 curl -X POST http://localhost:8000/documents \

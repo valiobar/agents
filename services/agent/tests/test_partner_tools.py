@@ -8,10 +8,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
-from pymongo.errors import DuplicateKeyError
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.clients.business import BusinessClientError
 from app.models.partner import PartnerInDB
 from app.tools.financial import build_partner_tools
 
@@ -35,7 +34,7 @@ def _partner(registration_number: str = "123456789") -> PartnerInDB:
     )
 
 
-class FakePartnerService:
+class FakeBusinessClient:
     def __init__(self) -> None:
         self.create_calls = 0
         self.existing: list[PartnerInDB] = []
@@ -56,13 +55,13 @@ class FakePartnerService:
         await sleep(0)
         self.create_calls += 1
         self.existing = [_partner(getattr(payload, "registration_number"))]
-        raise DuplicateKeyError("duplicate partner")
+        raise BusinessClientError("Partner already exists.", status_code=409)
 
 
 class PartnerToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_create_partner_resolves_existing_partner_after_duplicate_key(self) -> None:
-        partner_service = FakePartnerService()
-        context = SimpleNamespace(partner_service=partner_service)
+        business_client = FakeBusinessClient()
+        context = SimpleNamespace(business_client=business_client)
         create_partner = next(
             tool for tool in build_partner_tools("user-1", "company-1", context) if tool.name == "create_partner"
         )
@@ -81,7 +80,7 @@ class PartnerToolTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(json.loads(result)["id"], "partner-1")
-        self.assertEqual(partner_service.create_calls, 1)
+        self.assertEqual(business_client.create_calls, 1)
 
 
 if __name__ == "__main__":

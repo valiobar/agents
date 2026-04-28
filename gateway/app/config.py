@@ -8,6 +8,7 @@ class Settings(BaseSettings):
 
     auth_service_url: str = "http://auth:8001"
     agent_service_url: str = "http://agent:8002"
+    business_service_url: str = "http://business:8005"
     knowledge_service_url: str = "http://knowledge:8003"
     orchestrator_service_url: str = "http://orchestrator:8004"
 

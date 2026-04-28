@@ -4,8 +4,8 @@ import json
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
-from pymongo.errors import DuplicateKeyError
 
+from app.clients.business import BusinessClientError
 from app.models.companybook import CompanyBookPartnerMappingError
 from app.models.partner import PartnerCreate, PartnerInDB, PartnerKind
 from app.runtime.tool_context import ToolContext
@@ -51,7 +51,7 @@ async def _resolve_existing_partner_by_uic(
     uic: str,
     context: ToolContext,
 ) -> PartnerInDB | None:
-    matches = await context.partner_service.list_partners(
+    matches = await context.business_client.list_partners(
         user_id=user_id,
         company_id=company_id,
         kind=None,
@@ -70,14 +70,19 @@ async def _create_or_resolve_partner(
     context: ToolContext,
 ) -> PartnerInDB | str:
     try:
-        return await context.partner_service.create_partner(user_id, payload)
-    except DuplicateKeyError:
-        existing = await _resolve_existing_partner_by_uic(
-            user_id=user_id,
-            company_id=company_id,
-            uic=payload.registration_number,
-            context=context,
-        )
+        return await context.business_client.create_partner(user_id, payload)
+    except BusinessClientError as exc:
+        if exc.status_code != 409:
+            return exc.message
+        try:
+            existing = await _resolve_existing_partner_by_uic(
+                user_id=user_id,
+                company_id=company_id,
+                uic=payload.registration_number,
+                context=context,
+            )
+        except BusinessClientError as resolve_exc:
+            return resolve_exc.message
         if existing is not None:
             return existing
         return _json(
@@ -97,12 +102,15 @@ async def _import_companybook_partner_for_company(
     args: ImportCompanyBookPartnerArgs,
     context: ToolContext,
 ) -> str:
-    existing = await _resolve_existing_partner_by_uic(
-        user_id=user_id,
-        company_id=company_id,
-        uic=args.uic,
-        context=context,
-    )
+    try:
+        existing = await _resolve_existing_partner_by_uic(
+            user_id=user_id,
+            company_id=company_id,
+            uic=args.uic,
+            context=context,
+        )
+    except BusinessClientError as exc:
+        return exc.message
     if existing is not None:
         return _json(existing.model_dump(mode="json"))
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import UploadFile
 
 from app.adapters.chroma import ChromaAdapter
-from app.clients.agent_service import AgentServiceClient
+from app.clients.business import BusinessServiceClient
 from app.models.document import DocumentResponse, DocumentStatus, DocumentUpdate
 from app.repositories.document_repo import DocumentRepository
 from app.services.ingestion_service import DocumentNotFoundError, IngestionService
@@ -15,12 +15,12 @@ class DocumentService:
         documents: DocumentRepository,
         ingestion: IngestionService,
         vector_store: ChromaAdapter,
-        agent_service: AgentServiceClient,
+        business_service: BusinessServiceClient,
     ) -> None:
         self.documents = documents
         self.ingestion = ingestion
         self.vector_store = vector_store
-        self.agent_service = agent_service
+        self.business_service = business_service
 
     async def upload(self, user_id: str, company_id: str, file: UploadFile) -> DocumentResponse:
         content = await file.read()
