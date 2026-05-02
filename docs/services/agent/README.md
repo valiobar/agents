@@ -192,7 +192,7 @@ data: {"conversation_id":"665f1f77c9e0f7a8093bb711"}
 | `BUSINESS_SERVICE_URL` | `http://business:8005` | Internal Business Service URL used for company validation and financial tools. |
 | `BUSINESS_TIMEOUT_SECONDS` | `15.0` | Per-request timeout for Business Service calls. |
 | `OPENAI_API_KEY` | empty | Required for `provider: "openai"`. |
-| `OPENAI_CHAT_MODEL` | `gpt-5-mini` | Default OpenAI chat model. |
+| `OPENAI_CHAT_MODEL` | `gpt-4.1-mini` | Default OpenAI chat model. |
 | `ANTHROPIC_API_KEY` | empty | Required for `provider: "anthropic"`. |
 | `ANTHROPIC_CHAT_MODEL` | `claude-3-5-haiku-latest` | Default Anthropic chat model. |
 | `DEEPSEEK_API_KEY` | empty | Required for `provider: "deepseek"`. |
@@ -201,7 +201,7 @@ data: {"conversation_id":"665f1f77c9e0f7a8093bb711"}
 | `OLLAMA_CHAT_MODEL` | `llama3.1` | Default Ollama model. |
 | `DEFAULT_AGENT_PROVIDER` | `openai` | Provider used when client omits one. |
 | `MAX_HISTORY_MESSAGES` | `20` | Recent conversation messages sent to the runtime. |
-| `RAG_TOP_K` | `5` | Number of chunks requested from Knowledge Base retrieval. |
+| `RAG_TOP_K` | `3` | Number of chunks requested from Knowledge Base retrieval. |
 | `COMPANYBOOK_API_KEY` | empty | Optional CompanyBook.BG API key; missing values return a tool-level configuration error. |
 | `COMPANYBOOK_BASE_URL` | `https://api.companybook.bg/api` | CompanyBook.BG API base URL. |
 | `COMPANYBOOK_TIMEOUT_SECONDS` | `10.0` | Per-request timeout for CompanyBook calls. |

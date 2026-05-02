@@ -15,13 +15,13 @@ Phase 2 implements the Knowledge Base Service beyond the original health-check s
 
 External clients call these endpoints through the API Gateway at `http://localhost:8000`. The gateway validates JWTs and injects `x-user-id` for user-scoped document operations.
 
-`POST /documents`, `GET /documents`, and user-document retrieval require a `company_id`. The Knowledge Base Service validates company ownership through the Agent Service internal `GET /companies/{company_id}/exists` endpoint before storing metadata, writing uploaded chunks, or retrieving uploaded chunks. Cross-user company ids return `404`.
+`POST /documents`, `GET /documents`, and user-document retrieval require a `company_id`. The Knowledge Base Service validates company ownership through the Business Service internal `GET /companies/{company_id}/exists` endpoint before storing metadata, writing uploaded chunks, or retrieving uploaded chunks. Cross-user company ids return `404`.
 
 ## Run Locally
 
 ```bash
 cp .env.example .env
-docker compose up --build mongodb chromadb auth gateway knowledge
+docker compose up --build mongodb chromadb auth business gateway knowledge
 ```
 
 Minimum required configuration:
@@ -41,7 +41,7 @@ Minimum required configuration:
 | `MAX_UPLOAD_SIZE_BYTES` | `10485760` | Upload size limit |
 | `TAX_DOCS_PATH` | `data/knowledgebase/tax` | Directory scanned when tax preload is enabled |
 | `PRELOAD_TAX_DOCS` | `false` | Enables startup preload into `global_tax` |
-| `AGENT_SERVICE_URL` | `http://agent:8002` | Internal Agent Service URL used for company ownership validation |
+| `BUSINESS_SERVICE_URL` | `http://business:8005` | Internal Business Service URL used for company ownership validation |
 
 ## Internal Architecture
 
@@ -81,7 +81,7 @@ Raw uploaded documents are not persisted. MongoDB stores metadata and ChromaDB s
 
 ## Ingestion Behavior
 
-`IngestionService` validates the company through Agent Service, checks upload size and content type, computes a SHA-256 content hash, and returns an existing ready document when identical content was already ingested for the same `user_id + company_id`. New or changed documents are loaded by `load_document`, chunked by `chunk_pages`, embedded by `EmbeddingProvider`, and written to ChromaDB through `ChromaAdapter.add_chunks`.
+`IngestionService` validates the company through Business Service, checks upload size and content type, computes a SHA-256 content hash, and returns an existing ready document when identical content was already ingested for the same `user_id + company_id`. New or changed documents are loaded by `load_document`, chunked by `chunk_pages`, embedded by `EmbeddingProvider`, and written to ChromaDB through `ChromaAdapter.add_chunks`.
 
 When an update changes content, stale chunks are removed from `user_{user_id}` before new chunks are inserted with the original document `company_id`. Empty documents fail with `400`, unsupported types fail with `415`, and oversized uploads fail with `413`.
 

@@ -118,13 +118,9 @@ class InvoiceCreate(MoneyModel):
         return self
 
 
-class InvoiceUpdate(MoneyModel):
-    status: InvoiceStatus | None = None
-    due_date: date | None = None
-    notes: str | None = Field(default=None, max_length=2000)
+class InvoiceResponse(MoneyModel):
+    model_config = ConfigDict(from_attributes=True)
 
-
-class InvoiceInDB(MoneyModel):
     id: str
     user_id: str
     company_id: str | None = None
@@ -155,10 +151,6 @@ class InvoiceInDB(MoneyModel):
     notes: str | None
     created_at: datetime = Field(default_factory=_utc_now)
     updated_at: datetime = Field(default_factory=_utc_now)
-
-
-class InvoiceResponse(InvoiceInDB):
-    model_config = ConfigDict(from_attributes=True)
 
 
 class InvoiceFilters(BaseModel):
@@ -195,6 +187,7 @@ class ExpenseCreate(MoneyModel):
     deductible_rate: Decimal = Field(default=Decimal("1.0"), ge=0, le=1)
     source_document_type: ExpenseSourceDocumentType | None = None
     source_document_id: str | None = None
+    source_document_number: str | None = Field(default=None, max_length=120)
     items: list[ExpenseItemCreate] | None = None
 
     @model_validator(mode="after")
@@ -204,7 +197,9 @@ class ExpenseCreate(MoneyModel):
         return self
 
 
-class ExpenseInDB(ExpenseCreate):
+class ExpenseResponse(ExpenseCreate):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     user_id: str
     amount: Decimal
@@ -212,10 +207,6 @@ class ExpenseInDB(ExpenseCreate):
     deductible_amount: Decimal
     created_at: datetime
     updated_at: datetime
-
-
-class ExpenseResponse(ExpenseInDB):
-    model_config = ConfigDict(from_attributes=True)
 
 
 class ExpenseFilters(BaseModel):

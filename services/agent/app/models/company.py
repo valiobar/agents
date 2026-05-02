@@ -40,7 +40,11 @@ def _validate_logo_data_url(value: str | None) -> str | None:
     return value
 
 
-class CompanyCreate(BaseModel):
+class CompanyResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: str
     name: str = Field(min_length=1, max_length=200)
     registration_number: str = Field(min_length=1, max_length=64)
     vat_number: str | None = Field(default=None, max_length=64)
@@ -52,6 +56,8 @@ class CompanyCreate(BaseModel):
     phone: str | None = Field(default=None, max_length=64)
     logo_data_url: str | None = None
     is_default: bool = False
+    created_at: datetime
+    updated_at: datetime
 
     @field_validator("vat_number", "phone", "email", "logo_data_url", mode="before")
     @classmethod
@@ -62,39 +68,3 @@ class CompanyCreate(BaseModel):
     @classmethod
     def validate_logo(cls, value: str | None) -> str | None:
         return _validate_logo_data_url(value)
-
-
-class CompanyUpdate(BaseModel):
-    name: str | None = Field(default=None, min_length=1, max_length=200)
-    registration_number: str | None = Field(default=None, min_length=1, max_length=64)
-    vat_number: str | None = Field(default=None, max_length=64)
-    city: str | None = Field(default=None, min_length=1, max_length=120)
-    country: str | None = Field(default=None, min_length=1, max_length=120)
-    address: str | None = Field(default=None, min_length=1, max_length=500)
-    accountable_person: str | None = Field(default=None, min_length=1, max_length=200)
-    email: EmailStr | None = None
-    phone: str | None = Field(default=None, max_length=64)
-    logo_data_url: str | None = None
-    is_default: bool | None = None
-
-    @field_validator("name", "registration_number", "vat_number", "city", "country", "address", "accountable_person", "phone", "email", "logo_data_url", mode="before")
-    @classmethod
-    def normalize_optional_strings(cls, value: object) -> object | None:
-        return _none_if_blank(value)
-
-    @field_validator("logo_data_url")
-    @classmethod
-    def validate_logo(cls, value: str | None) -> str | None:
-        return _validate_logo_data_url(value)
-
-
-class CompanyInDB(CompanyCreate):
-    id: str
-    user_id: str
-    created_at: datetime
-    updated_at: datetime
-
-
-class CompanyResponse(CompanyInDB):
-    model_config = ConfigDict(from_attributes=True)
-

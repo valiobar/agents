@@ -6,6 +6,7 @@ from app.config import settings
 from app.errors import DocumentNotFoundError, EmptyDocumentError, UploadTooLargeError
 from app.embeddings.provider import EmbeddingProvider
 from app.models.document import ChunkMetadata, DocumentCreate, DocumentInDB, DocumentStatus, DocumentUpdate
+from app.models.expense_extraction import ExpenseDraftRequestSourceDocumentType
 from app.repositories.document_repo import DocumentRepository
 from app.errors import UnsupportedDocumentTypeError
 from app.services.loaders import load_document
@@ -99,6 +100,36 @@ class IngestionService:
                 DocumentUpdate(status=DocumentStatus.FAILED, error_message=str(exc)),
             )
             raise
+
+    async def create_source_document_metadata(
+        self,
+        *,
+        user_id: str,
+        company_id: str,
+        filename: str,
+        content_type: str,
+        content: bytes,
+        source_document_type: ExpenseDraftRequestSourceDocumentType,
+    ) -> DocumentInDB:
+        if len(content) > settings.max_upload_size_bytes:
+            raise UploadTooLargeError()
+        if content_type not in settings.allowed_content_types:
+            raise UnsupportedDocumentTypeError(content_type)
+
+        await self.business_service.require_company(user_id, company_id)
+        content_hash = compute_sha256(content)
+
+        return await self.documents.create(
+            user_id=user_id,
+            document=DocumentCreate(
+                company_id=company_id,
+                filename=filename,
+                content_type=content_type,
+                size_bytes=len(content),
+                content_hash=content_hash,
+                metadata={"source_document_type": source_document_type},
+            ),
+        )
 
     async def reingest_upload(
         self,

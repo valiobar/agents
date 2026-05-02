@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     db_name: str = "agents"
 
     knowledge_service_url: str = "http://knowledge:8003"
+    knowledge_timeout_seconds: float = Field(
+        default=30.0,
+        validation_alias="KNOWLEDGE_TIMEOUT_SECONDS",
+    )
     business_service_url: str = Field(
         default="http://business:8005",
         validation_alias="BUSINESS_SERVICE_URL",
@@ -19,7 +23,15 @@ class Settings(BaseSettings):
     )
 
     openai_api_key: str = ""
-    openai_chat_model: str = "gpt-5-mini"
+    openai_chat_model: str = "gpt-4.1-mini"
+    openai_chat_timeout_seconds: float = Field(
+        default=60.0,
+        validation_alias="OPENAI_CHAT_TIMEOUT_SECONDS",
+    )
+    openai_chat_max_retries: int = Field(
+        default=2,
+        validation_alias="OPENAI_CHAT_MAX_RETRIES",
+    )
     anthropic_api_key: str = ""
     anthropic_chat_model: str = "claude-3-5-haiku-latest"
     deepseek_api_key: str = ""
@@ -32,9 +44,13 @@ class Settings(BaseSettings):
         validation_alias="DEFAULT_AGENT_PROVIDER",
     )
     default_agent_type: str = "accountant"
-    default_temperature: float = 0.2
+    default_temperature: float = 0.3
     max_history_messages: int = 20
-    rag_top_k: int = 5
+    rag_top_k: int = 3
+    max_agent_iterations: int = Field(
+        default=20,
+        validation_alias="MAX_AGENT_ITERATIONS",
+    )
     companybook_api_key: str = Field(default="", validation_alias="COMPANYBOOK_API_KEY")
     companybook_base_url: str = Field(
         default="https://api.companybook.bg/api",

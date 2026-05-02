@@ -186,8 +186,10 @@ export function UpdateAgentForm({ agent, onSuccess, onCancel }: Readonly<UpdateA
                     step="0.1"
                     min={0}
                     max={2}
-                    value={Number.isFinite(field.value) ? field.value : 0.2}
-                    onChange={(e) => field.onChange(e.target.value)}
+                    value={field.value ?? ""}
+                    onChange={(e) =>
+                      field.onChange(e.target.value === "" ? "" : e.target.valueAsNumber)
+                    }
                   />
                 </FormControl>
                 <FormMessage />

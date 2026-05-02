@@ -12,16 +12,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.clients.business import BusinessClientError
 from app.models.companybook import CompanyBookCompanyDetail
-from app.models.partner import PartnerInDB
+from app.models.partner import PartnerResponse
 from app.tools.companybook import (
     ImportCompanyBookPartnerArgs,
     _import_companybook_partner_for_company,
 )
 
 
-def _partner(registration_number: str = "123456789") -> PartnerInDB:
+def _partner(registration_number: str = "123456789") -> PartnerResponse:
     now = datetime.now(UTC)
-    return PartnerInDB(
+    return PartnerResponse(
         id="partner-1",
         user_id="user-1",
         company_id="company-1",
@@ -39,7 +39,7 @@ def _partner(registration_number: str = "123456789") -> PartnerInDB:
 
 
 class FakeBusinessClient:
-    def __init__(self, existing: list[PartnerInDB] | None = None, duplicate: bool = False) -> None:
+    def __init__(self, existing: list[PartnerResponse] | None = None, duplicate: bool = False) -> None:
         self.existing = existing or []
         self.duplicate = duplicate
         self.create_calls = 0
@@ -52,11 +52,11 @@ class FakeBusinessClient:
         query: str | None,
         limit: int,
         offset: int,
-    ) -> list[PartnerInDB]:
+    ) -> list[PartnerResponse]:
         await sleep(0)
         return self.existing
 
-    async def create_partner(self, user_id: str, payload: object) -> PartnerInDB:
+    async def create_partner(self, user_id: str, payload: object) -> PartnerResponse:
         await sleep(0)
         self.create_calls += 1
         if self.duplicate:

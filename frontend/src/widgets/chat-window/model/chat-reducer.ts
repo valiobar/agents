@@ -1,10 +1,14 @@
 import type { Message } from "@/entities/conversation/model/types";
+import type { ExpenseDraft } from "@/entities/expense/model/types";
 
 export interface ChatState {
   messages: Message[];
   streamingContent: string;
   status: "idle" | "streaming" | "error";
   error: string | null;
+  expenseDraftStatus: "idle" | "loading" | "ready" | "confirming" | "confirmed" | "error";
+  expenseDraft: ExpenseDraft | null;
+  expenseDraftError: string | null;
 }
 
 export type ChatAction =
@@ -13,7 +17,16 @@ export type ChatAction =
   | { type: "SEND_MESSAGE"; payload: string }
   | { type: "STREAM_TOKEN"; payload: string }
   | { type: "STREAM_COMPLETE" }
-  | { type: "STREAM_ERROR"; payload: string };
+  | { type: "STREAM_ERROR"; payload: string }
+  | { type: "EXPENSE_DRAFT_LOADING" }
+  | { type: "EXPENSE_DRAFT_READY"; payload: ExpenseDraft }
+  | { type: "EXPENSE_DRAFT_ERROR"; payload: string }
+  | { type: "EXPENSE_DRAFT_CLEAR" }
+  | { type: "EXPENSE_CONFIRMING" }
+  | {
+      type: "EXPENSE_CONFIRMATION_SUCCEEDED";
+      payload: { content: string; createdAt?: string };
+    };
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
@@ -24,6 +37,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         streamingContent: "",
         status: "idle",
         error: null,
+        expenseDraftStatus: "idle",
+        expenseDraft: null,
+        expenseDraftError: null,
       };
     case "RESET":
       return {
@@ -31,8 +47,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         streamingContent: "",
         status: "idle",
         error: null,
+        expenseDraftStatus: "idle",
+        expenseDraft: null,
+        expenseDraftError: null,
       };
-    case "SEND_MESSAGE":
+    case "SEND_MESSAGE": {
+      const clearConfirmedDraft = state.expenseDraftStatus === "confirmed";
       return {
         ...state,
         messages: [
@@ -47,7 +67,15 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         streamingContent: "",
         status: "streaming",
         error: null,
+        ...(clearConfirmedDraft
+          ? {
+              expenseDraftStatus: "idle" as const,
+              expenseDraft: null,
+              expenseDraftError: null,
+            }
+          : {}),
       };
+    }
     case "STREAM_TOKEN":
       return {
         ...state,
@@ -77,6 +105,57 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         status: "error",
         error: action.payload,
       };
+    case "EXPENSE_DRAFT_LOADING":
+      return {
+        ...state,
+        expenseDraftStatus: "loading",
+        expenseDraft: null,
+        expenseDraftError: null,
+      };
+    case "EXPENSE_CONFIRMING":
+      return {
+        ...state,
+        expenseDraftStatus: "confirming",
+        expenseDraftError: null,
+      };
+    case "EXPENSE_DRAFT_READY":
+      return {
+        ...state,
+        expenseDraftStatus: "ready",
+        expenseDraft: action.payload,
+        expenseDraftError: null,
+      };
+    case "EXPENSE_DRAFT_ERROR":
+      return {
+        ...state,
+        expenseDraftStatus: "error",
+        expenseDraft: null,
+        expenseDraftError: action.payload,
+      };
+    case "EXPENSE_DRAFT_CLEAR":
+      return {
+        ...state,
+        expenseDraftStatus: "idle",
+        expenseDraft: null,
+        expenseDraftError: null,
+      };
+    case "EXPENSE_CONFIRMATION_SUCCEEDED":
+      return {
+        ...state,
+        messages: [
+          ...state.messages,
+          {
+            role: "assistant",
+            content: action.payload.content,
+            created_at: action.payload.createdAt ?? new Date().toISOString(),
+            metadata: { kind: "expense_confirmation" },
+          },
+        ],
+        expenseDraftStatus: "confirmed",
+        expenseDraftError: null,
+      };
+    default:
+      return state;
   }
 }
 

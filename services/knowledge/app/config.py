@@ -1,3 +1,4 @@
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +15,14 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     embedding_model: str = "text-embedding-3-small"
     embedding_batch_size: int = 64
+    embedding_timeout_seconds: float = Field(
+        default=20.0, validation_alias="EMBEDDING_TIMEOUT_SECONDS"
+    )
+    expense_extraction_provider: str = Field(default="openai", validation_alias="EXPENSE_EXTRACTION_PROVIDER")
+    vision_extraction_model: str = Field(default="gpt-4.1-mini", validation_alias="VISION_EXTRACTION_MODEL")
+    expense_extraction_timeout_seconds: float = Field(
+        default=60.0, validation_alias="EXPENSE_EXTRACTION_TIMEOUT_SECONDS"
+    )
 
     chunk_size: int = 800
     chunk_overlap: int = 200
@@ -22,6 +31,9 @@ class Settings(BaseSettings):
         "application/pdf",
         "text/plain",
         "text/markdown",
+        "image/png",
+        "image/jpeg",
+        "image/webp",
     ]
 
     tax_docs_path: str = "data/knowledgebase/tax"

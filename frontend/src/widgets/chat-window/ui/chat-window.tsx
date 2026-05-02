@@ -6,14 +6,22 @@ import { useQueryClient } from "@tanstack/react-query";
 
 import { useConversation, useConversations } from "@/entities/conversation/api/queries";
 import { MessageList } from "@/entities/conversation/ui/message-list";
+import { expenseKeys } from "@/entities/expense/model/query-keys";
+import { partnerKeys } from "@/entities/partner/model/query-keys";
 import { streamAgentMessage } from "@/features/send-message/api/stream-message";
+import { confirmExtractedExpense, createExpenseDraft } from "@/features/send-message/api/receipt-expense";
+import { ExpenseDraftConfirmation } from "@/features/send-message/ui/expense-draft-confirmation";
 import { MessageInput } from "@/features/send-message/ui/message-input";
 import { conversationKeys } from "@/entities/conversation/model/query-keys";
+import { documentKeys } from "@/features/upload-document/api/mutations";
 import { useChatStore } from "@/shared/store/chat-store";
 import { useNotificationStore } from "@/shared/store/notification-store";
 import { Alert } from "@/shared/ui/alert";
 import { Button } from "@/shared/ui/button";
 import { cn } from "@/shared/lib/cn";
+import { buildExpenseConfirmationMessage } from "@/features/send-message/model/expense-confirmation-message";
+import { receiptUploadSchema, getReceiptUploadErrorMessage, type ExpenseDraftFormValues } from "@/features/send-message/model/receipt-expense-schema";
+import { Spinner } from "@/shared/ui/spinner";
 
 import { chatReducer, type ChatState } from "../model/chat-reducer";
 
@@ -50,6 +58,9 @@ export function ChatWindow({
       streamingContent: "",
       status: "idle",
       error: null,
+      expenseDraftStatus: "idle",
+      expenseDraft: null,
+      expenseDraftError: null,
     }),
     [],
   );
@@ -57,6 +68,14 @@ export function ChatWindow({
 
   const historyLoadedForConversation = useRef<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  const isExtractingExpense = state.expenseDraftStatus === "loading";
+  const isConfirmingExpense = state.expenseDraftStatus === "confirming";
+  const isExpenseConfirmed = state.expenseDraftStatus === "confirmed";
+  const hasActiveExpenseDraft =
+    state.expenseDraftStatus === "loading" ||
+    state.expenseDraftStatus === "ready" ||
+    state.expenseDraftStatus === "confirming";
 
   useEffect(() => {
     historyLoadedForConversation.current = null;
@@ -105,7 +124,7 @@ export function ChatWindow({
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [state.messages.length, state.streamingContent]);
+  }, [state.messages.length, state.streamingContent, state.expenseDraftStatus]);
 
   async function sendMessage(message: string) {
     if (!token) {
@@ -151,6 +170,82 @@ export function ChatWindow({
     }
   }
 
+  async function handleReceiptSelected(file: File) {
+    if (!token) {
+      addNotification("You must be logged in to upload receipts.", "error");
+      return;
+    }
+    if (!companyId) {
+      addNotification("Assign this agent to a company before uploading receipts.", "error");
+      return;
+    }
+    if (state.status === "streaming") {
+      addNotification("Please wait for the current response to finish before uploading a receipt.", "info");
+      return;
+    }
+
+    const validation = receiptUploadSchema.safeParse({ file, source_document_type: "auto" });
+    if (!validation.success) {
+      addNotification(validation.error.issues[0]?.message ?? "Invalid receipt file.", "error");
+      return;
+    }
+
+    dispatch({ type: "EXPENSE_DRAFT_LOADING" });
+    try {
+      const response = await createExpenseDraft({
+        agentId,
+        file,
+        sourceDocumentType: "auto",
+        token,
+      });
+      dispatch({ type: "EXPENSE_DRAFT_READY", payload: response.draft });
+    } catch (error) {
+      dispatch({ type: "EXPENSE_DRAFT_ERROR", payload: getReceiptUploadErrorMessage(error) });
+      addNotification(getReceiptUploadErrorMessage(error), "error");
+    }
+  }
+
+  async function handleDraftConfirm(values: ExpenseDraftFormValues) {
+    if (!token) {
+      addNotification("You must be logged in to confirm expenses.", "error");
+      return;
+    }
+
+    dispatch({ type: "EXPENSE_CONFIRMING" });
+
+    try {
+      const response = await confirmExtractedExpense({
+        agentId,
+        token,
+        draft: values,
+      });
+
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: expenseKeys.all }),
+        queryClient.invalidateQueries({ queryKey: partnerKeys.all }),
+        queryClient.invalidateQueries({ queryKey: documentKeys.all }),
+      ]);
+
+      dispatch({
+        type: "EXPENSE_CONFIRMATION_SUCCEEDED",
+        payload: {
+          content: buildExpenseConfirmationMessage(response),
+        },
+      });
+
+      const partnerMessage =
+        response.vendor_partner?.status === "created"
+          ? " Supplier partner created."
+          : response.vendor_partner?.status === "matched"
+            ? " Supplier partner matched."
+            : "";
+      addNotification(`Expense recorded: ${response.expense.counterparty}.${partnerMessage}`, "success");
+    } catch (error) {
+      dispatch({ type: "EXPENSE_DRAFT_READY", payload: values });
+      throw error;
+    }
+  }
+
   function startNewConversation() {
     setLoadLatestConversation(false);
     clearConversationId(agentId, companyId);
@@ -189,10 +284,43 @@ export function ChatWindow({
           messages={state.messages}
           streamingContent={state.streamingContent}
         />
+        {isExtractingExpense ? (
+          <output
+            className="mt-3 flex items-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground"
+          >
+            <Spinner />
+            <span>Reading document and extracting expense details...</span>
+          </output>
+        ) : null}
+        {(state.expenseDraftStatus === "ready" ||
+          state.expenseDraftStatus === "confirming" ||
+          state.expenseDraftStatus === "confirmed") &&
+        state.expenseDraft ? (
+          <ExpenseDraftConfirmation
+            draft={state.expenseDraft}
+            disabled={state.status === "streaming"}
+            confirming={isConfirmingExpense}
+            confirmed={isExpenseConfirmed}
+            onCancel={() => dispatch({ type: "EXPENSE_DRAFT_CLEAR" })}
+            onConfirm={handleDraftConfirm}
+          />
+        ) : null}
         <div ref={bottomRef} />
       </div>
 
-      <MessageInput disabled={state.status === "streaming"} onSend={sendMessage} />
+      {state.expenseDraftStatus === "error" && state.expenseDraftError ? (
+        <div className="px-4 pt-3">
+          <Alert variant="destructive">{state.expenseDraftError}</Alert>
+        </div>
+      ) : null}
+
+      <MessageInput
+        disabled={state.status === "streaming" || isConfirmingExpense}
+        receiptUploadDisabled={!companyId || state.status === "streaming" || hasActiveExpenseDraft}
+        receiptUploadLoading={isExtractingExpense}
+        onReceiptSelected={handleReceiptSelected}
+        onSend={sendMessage}
+      />
     </div>
   );
 }

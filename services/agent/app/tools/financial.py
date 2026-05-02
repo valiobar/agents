@@ -8,7 +8,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field, field_validator
 
 from app.clients.business import BusinessClientError
-from app.models.company import CompanyInDB
+from app.models.company import CompanyResponse
 from app.models.financial import (
     ExpenseCreate,
     ExpenseFilters,
@@ -16,7 +16,7 @@ from app.models.financial import (
     InvoiceCreate,
     InvoiceFilters,
 )
-from app.models.partner import PartnerCreate, PartnerInDB, PartnerKind
+from app.models.partner import PartnerCreate, PartnerKind, PartnerResponse
 from app.runtime.tool_context import ToolContext
 
 _UNASSIGNED_COMPANY_DESCRIPTION = "Required when the agent is not assigned to one company."
@@ -142,16 +142,16 @@ async def _with_scoped_company(
     return await callback(target_company_id)
 
 
-def _company_payload(company: CompanyInDB) -> dict:
+def _company_payload(company: CompanyResponse) -> dict:
     return company.model_dump(mode="json", exclude={"logo_data_url"})
 
 
-def _company_matches(company: CompanyInDB, query: str) -> bool:
+def _company_matches(company: CompanyResponse, query: str) -> bool:
     value = query.casefold()
     return value in company.name.casefold() or value in company.registration_number.casefold()
 
 
-def _matches_registration_number(partner: PartnerInDB, registration_number: str) -> bool:
+def _matches_registration_number(partner: PartnerResponse, registration_number: str) -> bool:
     return partner.registration_number.strip().casefold() == registration_number.strip().casefold()
 
 
@@ -160,7 +160,7 @@ async def _resolve_existing_partner_by_registration_number(
     company_id: str,
     registration_number: str,
     context: ToolContext,
-) -> PartnerInDB | None:
+) -> PartnerResponse | None:
     matches = await context.business_client.list_partners(
         user_id=user_id,
         company_id=company_id,
@@ -182,7 +182,7 @@ async def _create_or_resolve_partner(
     company_id: str,
     payload: PartnerCreate,
     context: ToolContext,
-) -> PartnerInDB | str:
+) -> PartnerResponse | str:
     try:
         return await context.business_client.create_partner(user_id, payload)
     except BusinessClientError as exc:

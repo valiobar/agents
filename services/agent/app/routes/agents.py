@@ -1,13 +1,20 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 from starlette.responses import StreamingResponse
 
-from app.dependencies import get_agent_service, get_chat_service, get_user_id
+from app.dependencies import get_agent_service, get_chat_service, get_receipt_service, get_user_id
 from app.models.agent import AgentCreate, AgentResponse, AgentUpdate
 from app.models.chat import ChatRequest
+from app.models.receipt import (
+    ConfirmExtractedExpenseRequest,
+    ConfirmExtractedExpenseResponse,
+    ExpenseDraftRequestSourceDocumentType,
+    ExpenseDraftResponse,
+)
 from app.services.agent_service import AgentService
 from app.services.chat_service import ChatService
+from app.services.receipt_service import ReceiptService
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -75,4 +82,42 @@ async def chat(
     return StreamingResponse(
         service.stream_chat(user_id, agent_id, payload),
         media_type="text/event-stream",
+    )
+
+
+@router.post(
+    "/{agent_id}/expense-drafts",
+    response_model=ExpenseDraftResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_expense_draft(
+    agent_id: str,
+    file: Annotated[UploadFile, File()],
+    user_id: Annotated[str, Depends(get_user_id)],
+    service: Annotated[ReceiptService, Depends(get_receipt_service)],
+    source_document_type: Annotated[ExpenseDraftRequestSourceDocumentType, Form()] = "auto",
+) -> ExpenseDraftResponse:
+    return await service.create_draft(
+        user_id=user_id,
+        agent_id=agent_id,
+        file=file,
+        source_document_type=source_document_type,
+    )
+
+
+@router.post(
+    "/{agent_id}/expenses/confirm",
+    response_model=ConfirmExtractedExpenseResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def confirm_expense(
+    agent_id: str,
+    payload: ConfirmExtractedExpenseRequest,
+    user_id: Annotated[str, Depends(get_user_id)],
+    service: Annotated[ReceiptService, Depends(get_receipt_service)],
+) -> ConfirmExtractedExpenseResponse:
+    return await service.confirm_expense(
+        user_id=user_id,
+        agent_id=agent_id,
+        payload=payload,
     )

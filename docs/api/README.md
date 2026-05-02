@@ -597,7 +597,7 @@ Uploads and ingests a PDF, text, or Markdown document for one authenticated user
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `file` | file | Yes | Document to ingest. Supported types: `application/pdf`, `text/plain`, `text/markdown`. |
-| `company_id` | string | Yes | Owned company id. Business Service is the Phase 5 target for Knowledge Base ownership validation. |
+| `company_id` | string | Yes | Owned company id. Knowledge Base validates ownership through Business Service before ingestion. |
 
 ```bash
 curl -X POST http://localhost:8000/documents \

@@ -51,7 +51,7 @@ export function CreateAgentForm({ onSuccess, onCancel }: Readonly<CreateAgentFor
       config: {
         provider: "openai",
         model: null,
-        temperature: 0.2,
+        temperature: 0.3,
         system_prompt_override: null,
       },
     },
@@ -186,8 +186,10 @@ export function CreateAgentForm({ onSuccess, onCancel }: Readonly<CreateAgentFor
                     step="0.1"
                     min={0}
                     max={2}
-                    value={Number.isFinite(field.value) ? field.value : 0.2}
-                    onChange={(e) => field.onChange(e.target.value)}
+                    value={field.value ?? ""}
+                    onChange={(e) =>
+                      field.onChange(e.target.value === "" ? "" : e.target.valueAsNumber)
+                    }
                   />
                 </FormControl>
                 <FormMessage />

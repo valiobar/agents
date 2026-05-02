@@ -10,6 +10,8 @@ from app.clients.business import BusinessServiceClient
 from app.embeddings.provider import EmbeddingProvider
 from app.repositories.document_repo import DocumentRepository
 from app.services.document_service import DocumentService
+from app.services.expense_extraction_provider import OpenAIExpenseExtractionProvider
+from app.services.expense_extraction_service import ExpenseExtractionService
 from app.services.ingestion_service import IngestionService
 from app.services.retrieval_service import RetrievalService
 from app.utils.db import get_database
@@ -47,7 +49,18 @@ def get_document_service(
     business_service: BusinessServiceClient = Depends(get_business_service_client),
 ) -> DocumentService:
     ingestion = IngestionService(documents, vector_store, embeddings, business_service)
-    return DocumentService(documents, ingestion, vector_store, business_service)
+    expense_provider = OpenAIExpenseExtractionProvider(
+        api_key=settings.openai_api_key,
+        model=settings.vision_extraction_model,
+        timeout_seconds=settings.expense_extraction_timeout_seconds,
+    )
+    expense_extraction = ExpenseExtractionService(
+        provider=expense_provider,
+        provider_name=settings.expense_extraction_provider,
+        model=settings.vision_extraction_model,
+    )
+
+    return DocumentService(documents, ingestion, vector_store, business_service, expense_extraction)
 
 
 def get_retrieval_service(

@@ -11,13 +11,13 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.clients.business import BusinessClientError
-from app.models.partner import PartnerInDB
+from app.models.partner import PartnerResponse
 from app.tools.financial import build_partner_tools
 
 
-def _partner(registration_number: str = "123456789") -> PartnerInDB:
+def _partner(registration_number: str = "123456789") -> PartnerResponse:
     now = datetime.now(UTC)
-    return PartnerInDB(
+    return PartnerResponse(
         id="partner-1",
         user_id="user-1",
         company_id="company-1",
@@ -37,7 +37,7 @@ def _partner(registration_number: str = "123456789") -> PartnerInDB:
 class FakeBusinessClient:
     def __init__(self) -> None:
         self.create_calls = 0
-        self.existing: list[PartnerInDB] = []
+        self.existing: list[PartnerResponse] = []
 
     async def list_partners(
         self,
@@ -47,11 +47,11 @@ class FakeBusinessClient:
         query: str | None,
         limit: int,
         offset: int,
-    ) -> list[PartnerInDB]:
+    ) -> list[PartnerResponse]:
         await sleep(0)
         return self.existing
 
-    async def create_partner(self, user_id: str, payload: object) -> PartnerInDB:
+    async def create_partner(self, user_id: str, payload: object) -> PartnerResponse:
         await sleep(0)
         self.create_calls += 1
         self.existing = [_partner(getattr(payload, "registration_number"))]

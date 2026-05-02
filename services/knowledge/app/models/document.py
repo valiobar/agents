@@ -31,6 +31,7 @@ class DocumentCreate(BaseModel):
     content_type: str
     size_bytes: int
     content_hash: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class DocumentUpdate(BaseModel):
@@ -41,6 +42,7 @@ class DocumentUpdate(BaseModel):
     status: DocumentStatus | None = None
     error_message: str | None = None
     chunk_count: int | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class DocumentInDB(BaseModel):

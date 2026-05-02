@@ -29,6 +29,7 @@ export const recordExpenseSchema = z.object({
   deductible_rate: rateString.default("1.0"),
   source_document_type: z.enum(["invoice", "receipt"]).optional().nullable(),
   source_document_id: z.string().optional().nullable(),
+  source_document_number: z.string().max(120).optional().nullable(),
 });
 
 export type RecordExpenseInput = z.infer<typeof recordExpenseSchema>;

@@ -65,6 +65,11 @@ docker compose exec auth python - <<'PY'
 import urllib.request
 print(urllib.request.urlopen("http://localhost:8001/health").read().decode())
 PY
+
+docker compose exec gateway python - <<'PY'
+import urllib.request
+print(urllib.request.urlopen("http://business:8005/health").read().decode())
+PY
 ```
 
 ---
@@ -81,6 +86,7 @@ PY
                          │  │  :8000   │──► Agent      (:8002)      │
                          │  │         │──► Knowledge  (:8003)      │
                          │  │         │──► Orchestr.  (:8004)      │
+                         │  │         │──► Business   (:8005)      │
                          │  └────┬────┘                             │
                          │       │                                  │
                          │  ┌────▼────┐  ┌──────────┐  ┌─────────┐ │
@@ -104,6 +110,7 @@ Every container sits on a single Docker bridge network (`agents-network`). Servi
 | Agent | 8002 | not published | No |
 | Knowledge | 8003 | not published | No |
 | Orchestrator | 8004 | not published | No |
+| Business | 8005 | not published | No |
 | MongoDB | 27017 | not published | No |
 | Redis | 6379 | not published | No |
 | ChromaDB | 8000 | not published | No |
@@ -126,7 +133,8 @@ Phase 1 — Infrastructure
 
 Phase 2 — Application services (only after their deps are healthy)
   auth         ← waits for mongodb (healthy)
-  gateway      ← waits for redis (healthy) + auth (started)
+  business     ← waits for mongodb (healthy)
+  gateway      ← waits for redis (healthy) + auth (started) + business (started)
   agent        ← waits for mongodb (healthy)
   knowledge    ← waits for mongodb (healthy) + chromadb (started)
   orchestrator ← waits for redis (healthy)
@@ -158,7 +166,7 @@ docker compose down -v   # containers AND volumes removed — full reset
 
 The company-scope rollout includes a one-off Agent Service utility for local or test environments where existing MongoDB records are disposable. It deletes user-scoped Agent/Knowledge metadata that may not have `company_id`, then optionally creates a fresh `Default Company` for each reset user.
 
-This command is destructive and must not be wired into service startup or run against production data. It only resets MongoDB collections; use `docker compose down -v` when you also need to clear Redis or ChromaDB volumes.
+This command is destructive and must not be wired into service startup or run against production data. It only resets MongoDB collections, including Business-owned company, partner, invoice, expense, and counter data; use `docker compose down -v` when you also need to clear Redis or ChromaDB volumes.
 
 Preview the records that would be deleted for one user:
 
@@ -195,8 +203,8 @@ All application services read from a single `.env` file via `env_file: .env` in 
 
 | Variable | Default | Used by | Description |
 |----------|---------|---------|-------------|
-| `MONGODB_URL` | `mongodb://mongodb:27017` | auth, agent, knowledge | MongoDB connection string |
-| `DB_NAME` | `agents` | auth, agent, knowledge | Database name |
+| `MONGODB_URL` | `mongodb://mongodb:27017` | auth, agent, business, knowledge | MongoDB connection string |
+| `DB_NAME` | `agents` | auth, agent, business, knowledge | Database name |
 | `REDIS_URL` | `redis://redis:6379` | gateway, orchestrator | Redis connection string |
 | `CHROMADB_HOST` | `chromadb` | knowledge | ChromaDB hostname |
 | `CHROMADB_PORT` | `8000` | knowledge | ChromaDB internal port used by containers |
@@ -215,7 +223,8 @@ All application services read from a single `.env` file via `env_file: .env` in 
 | `MAX_UPLOAD_SIZE_BYTES` | `10485760` | knowledge | Max upload size |
 | `TAX_DOCS_PATH` | `data/knowledgebase/tax` | knowledge | Tax preload source directory |
 | `PRELOAD_TAX_DOCS` | `false` | knowledge | Enables startup load into ChromaDB `global_tax` |
-| `AGENT_SERVICE_URL` | `http://agent:8002` | knowledge | Internal Agent Service URL for company ownership validation |
+| `BUSINESS_SERVICE_URL` | `http://business:8005` | gateway, agent, knowledge | Internal Business Service URL for domain routing, Agent tools, and Knowledge company ownership validation |
+| `BUSINESS_TIMEOUT_SECONDS` | `15.0` | agent | Per-request timeout for Agent-to-Business calls |
 | `NEXT_PUBLIC_GATEWAY_URL` | `http://localhost:8000` | frontend browser | Public gateway URL used by client-side fetches and SSE |
 | `GATEWAY_URL` | `http://gateway:8000` | frontend server runtime | Internal gateway URL for NextAuth server-side requests in Docker |
 | `NEXTAUTH_URL` | `http://localhost:3000` | frontend | Public frontend URL used by NextAuth callbacks |
@@ -242,13 +251,13 @@ npm run dev
 Run with Docker Compose:
 
 ```bash
-docker compose up --build frontend gateway auth agent knowledge mongodb redis chromadb
+docker compose up --build frontend gateway auth business agent knowledge mongodb redis chromadb
 ```
 
 Run the frontend in Docker development mode:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build frontend gateway auth agent knowledge mongodb redis chromadb
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build frontend gateway auth business agent knowledge mongodb redis chromadb
 ```
 
 Frontend verification commands:
@@ -276,7 +285,7 @@ Common frontend failures:
 Start only the services needed for authenticated Knowledge Base requests:
 
 ```bash
-docker compose up --build mongodb chromadb auth gateway knowledge
+docker compose up --build mongodb chromadb auth business gateway knowledge
 ```
 
 Required environment:
@@ -286,6 +295,7 @@ MONGODB_URL=mongodb://mongodb:27017
 DB_NAME=agents
 CHROMADB_HOST=chromadb
 CHROMADB_PORT=8000
+BUSINESS_SERVICE_URL=http://business:8005
 JWT_SECRET=change-me-to-a-strong-random-value
 OPENAI_API_KEY=sk-...
 ```
@@ -304,6 +314,7 @@ Knowledge Base common failures:
 |---------|--------------|-----|
 | OpenAI authentication error | Missing or invalid `OPENAI_API_KEY` | Add a valid key to `.env` before uploading or retrieving |
 | Chroma connection refused | Container is using the host-mapped Chroma port | Set `CHROMADB_PORT=8000` |
+| Business validation unavailable | `business` is not running or `BUSINESS_SERVICE_URL` is wrong | Start `business` and verify `http://business:8005/health` from another container |
 | `415 Unsupported document type` | Unsupported upload content type | Use PDF, text, or Markdown |
 | Empty retrieval from `global_tax` | No tax docs loaded or `PRELOAD_TAX_DOCS=false` | Add supported files under `TAX_DOCS_PATH` and enable preload |
 | `404 Company not found` on document upload/retrieve | `company_id` is missing, invalid, or belongs to another user | Create/select an owned company through `/companies` first |

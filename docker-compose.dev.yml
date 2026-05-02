@@ -52,6 +52,7 @@ services:
       - ./services/agent/app:/app/app
     environment:
       - AGENT_ENV=development
+      - OPENAI_CHAT_MODEL=gpt-4.1-mini
     command: uvicorn app.main:app --host 0.0.0.0 --port 8002 --reload
     develop:
       watch:
@@ -67,6 +68,8 @@ services:
     volumes:
       - ./services/knowledge/app:/app/app
       - ./data/knowledgebase/tax:/app/data/knowledgebase/tax:ro
+    environment:
+      - PRELOAD_TAX_DOCS=false
     command: uvicorn app.main:app --host 0.0.0.0 --port 8003 --reload
     develop:
       watch:

@@ -195,6 +195,7 @@ class ExpenseCreate(MoneyModel):
     deductible_rate: Decimal = Field(default=Decimal("1.0"), ge=0, le=1)
     source_document_type: ExpenseSourceDocumentType | None = None
     source_document_id: str | None = None
+    source_document_number: str | None = Field(default=None, max_length=120)
     items: list[ExpenseItemCreate] | None = None
 
     @model_validator(mode="after")

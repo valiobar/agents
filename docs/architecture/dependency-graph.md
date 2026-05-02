@@ -247,7 +247,7 @@ graph LR
 | Gateway | Orchestrator | HTTP | `/orchestrator/*` | Proxy workflow management (Phase 2) |
 | Agent | Business | HTTP | `/companies/{id}/exists`, `/partners`, `/invoices`, `/expenses`, `/financial-summary` | Validate company assignment and execute financial/partner tools |
 | Agent | Knowledge | HTTP | `POST /retrieve` | RAG semantic search during agent tool execution |
-| Knowledge | Business | HTTP | `GET /companies/{id}/exists` | Phase 5 target for validating company ownership on uploads and user-document retrieval |
+| Knowledge | Business | HTTP | `GET /companies/{id}/exists` | Validate company ownership on uploads and user-document retrieval |
 | Orchestrator | Agent | HTTP | (Phase 2) | Task dispatch to agent workers |
 
 ---
@@ -318,7 +318,7 @@ A quick-reference for each service: what it needs to start, what it talks to at 
 
 ### Knowledge Base Service
 - **Startup requires:** MongoDB (healthy), ChromaDB (started)
-- **Runtime dependencies:** MongoDB, ChromaDB, OpenAI (embedding); Business Service is the Phase 5 validation target for company ownership
+- **Runtime dependencies:** MongoDB, ChromaDB, OpenAI (embedding), Business Service for company ownership validation
 - **Data owned:** `documents` collection (MongoDB) + ChromaDB collections (`global_tax`, `user_{id}`)
 - **External:** OpenAI API (embeddings only)
 

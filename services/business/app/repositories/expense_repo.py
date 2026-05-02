@@ -37,6 +37,7 @@ class ExpenseRepository:
             deductible_amount=doc["deductible_amount"],
             source_document_type=doc.get("source_document_type"),
             source_document_id=doc.get("source_document_id"),
+            source_document_number=doc.get("source_document_number"),
             items=doc.get("items"),
             created_at=created_at,
             updated_at=updated_at,

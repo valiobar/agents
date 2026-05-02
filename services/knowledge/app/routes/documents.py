@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile,
 
 from app.dependencies import get_document_service, require_user_id
 from app.models.document import DocumentResponse
+from app.models.expense_extraction import ExpenseDraftRequestSourceDocumentType, ExpenseDraftResponse
 from app.services.document_service import DocumentService
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -19,6 +20,22 @@ async def upload_document(
     service: Annotated[DocumentService, Depends(get_document_service)],
 ) -> DocumentResponse:
     return await service.upload(user_id=user_id, company_id=company_id, file=file)
+
+
+@router.post("/expense-draft", response_model=ExpenseDraftResponse, status_code=status.HTTP_201_CREATED)
+async def create_expense_draft(
+    file: Annotated[UploadFile, File()],
+    company_id: Annotated[str, Form(min_length=1)],
+    user_id: Annotated[str, Depends(require_user_id)],
+    service: Annotated[DocumentService, Depends(get_document_service)],
+    source_document_type: Annotated[ExpenseDraftRequestSourceDocumentType, Form()] = "auto",
+) -> ExpenseDraftResponse:
+    return await service.create_expense_draft(
+        user_id=user_id,
+        company_id=company_id,
+        file=file,
+        source_document_type=source_document_type,
+    )
 
 
 @router.put("/{document_id}", response_model=DocumentResponse)

@@ -55,19 +55,19 @@ The proxy resolves the first matching path prefix from the `SERVICE_MAP` diction
 | Path Prefix | Target Service | Internal URL | Auth Required |
 |-------------|---------------|--------------|:------------:|
 | `/auth/*` | Auth Service | `http://auth:8001` | No |
-| `/companies/*` | Agent Service | `http://agent:8002` | Yes |
-| `/partners/*` | Agent Service | `http://agent:8002` | Yes |
+| `/companies/*` | Business Service | `http://business:8005` | Yes |
+| `/partners/*` | Business Service | `http://business:8005` | Yes |
 | `/agents/*` | Agent Service | `http://agent:8002` | Yes |
 | `/conversations/*` | Agent Service | `http://agent:8002` | Yes |
-| `/invoices/*` | Agent Service | `http://agent:8002` | Yes |
-| `/expenses/*` | Agent Service | `http://agent:8002` | Yes |
+| `/invoices/*` | Business Service | `http://business:8005` | Yes |
+| `/expenses/*` | Business Service | `http://business:8005` | Yes |
 | `/documents` | Knowledge Base Service | `http://knowledge:8003` | Yes |
 | `/retrieve` | Knowledge Base Service | `http://knowledge:8003` | Yes |
 | `/orchestrator/*` | Orchestrator Service | `http://orchestrator:8004` | Yes |
 
 **Path forwarding:** The full path (including the prefix) is forwarded to the target service. For example, `GET /documents?company_id=abc&limit=20` is proxied to `http://knowledge:8003/documents?company_id=abc&limit=20`. Query parameters are preserved.
 
-`/companies/*`, `/partners/*`, `/invoices/*`, and `/expenses/*` are implemented Agent Service routes. The gateway only authenticates, rate limits, injects `x-user-id`, and forwards these requests; company ownership, partner scoping, invoice snapshots, and financial business rules live in the Agent Service.
+`/companies/*`, `/partners/*`, `/invoices/*`, and `/expenses/*` are Business Service routes. The gateway only authenticates, rate limits, injects `x-user-id`, and forwards these requests; company ownership, partner scoping, invoice snapshots, and financial business rules live in the Business Service.
 
 **Supported HTTP methods:** GET, POST, PUT, DELETE, PATCH.
 
@@ -249,6 +249,7 @@ All settings are loaded via Pydantic Settings from environment variables (and `.
 | `RATE_LIMIT_PER_HOUR` | `50` | Max requests per authenticated user per hour |
 | `AUTH_SERVICE_URL` | `http://auth:8001` | Auth service base URL (internal Docker network) |
 | `AGENT_SERVICE_URL` | `http://agent:8002` | Agent service base URL |
+| `BUSINESS_SERVICE_URL` | `http://business:8005` | Business service base URL |
 | `KNOWLEDGE_SERVICE_URL` | `http://knowledge:8003` | Knowledge Base service base URL |
 | `ORCHESTRATOR_SERVICE_URL` | `http://orchestrator:8004` | Orchestrator service base URL |
 
@@ -337,7 +338,7 @@ Client  ←  200 [{ "id": "...", "name": "My Accountant", ... }]
 
 ### Authenticated — Company Workflow
 
-Company, partner, agent, and invoice requests all use the same gateway behavior: validate JWT, rate limit by user, inject `x-user-id`, and proxy to the Agent Service.
+Company, partner, invoice, and expense requests use the same gateway behavior as Agent requests: validate JWT, rate limit by user, inject `x-user-id`, and proxy to the target service. Business-domain prefixes route to the Business Service, while `/agents` and `/conversations` route to the Agent Service.
 
 ```
 Client  →  POST http://localhost:8000/companies
@@ -345,13 +346,13 @@ Client  →  POST http://localhost:8000/companies
             { "name": "Acme Ltd", "registration_number": "123", ... }
 
   Gateway:
-    /companies → http://agent:8002
+    /companies → http://business:8005
     inject header: x-user-id: 665f...
 
 Client  ←  201 { "id": "...", "user_id": "665f...", "name": "Acme Ltd", ... }
 ```
 
-The gateway does not check whether a `company_id` or `partner_id` belongs to the user. Agent Service and Knowledge Base Service handlers perform those ownership checks and return `404` for cross-user or cross-company ids.
+The gateway does not check whether a `company_id` or `partner_id` belongs to the user. Business Service owns business-domain ownership checks, Agent Service validates assigned agent companies through Business, and Knowledge Base Service validates document company scope through Business.
 
 ### Rate-Limited Request
 

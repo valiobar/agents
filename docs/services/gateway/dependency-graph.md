@@ -8,6 +8,7 @@ graph TD
     Gateway --> Redis[("Redis")]
     Gateway --> Auth["Auth Service"]
     Gateway --> Agent["Agent Service"]
+    Gateway --> Business["Business Service"]
     Gateway --> Knowledge["Knowledge Base Service"]
     Gateway --> Orchestrator["Orchestrator Service"]
 
@@ -29,6 +30,7 @@ graph TD
     Proxy --> Config
     Proxy --> Auth
     Proxy --> Agent
+    Proxy --> Business
     Proxy --> Knowledge
     Proxy --> Orchestrator
 ```
@@ -40,8 +42,10 @@ graph TD
 | `/auth/*` | Auth Service | Implemented |
 | `/agents/*` | Agent Service | Implemented |
 | `/conversations/*` | Agent Service | Implemented |
-| `/invoices/*` | Agent Service | Implemented |
-| `/expenses/*` | Agent Service | Implemented |
+| `/companies/*` | Business Service | Implemented |
+| `/partners/*` | Business Service | Implemented |
+| `/invoices/*` | Business Service | Implemented |
+| `/expenses/*` | Business Service | Implemented |
 | `/documents` | Knowledge Base Service | Implemented |
 | `/retrieve` | Knowledge Base Service | Implemented |
 | `/orchestrator/*` | Orchestrator Service | Stub target |
@@ -52,7 +56,8 @@ graph TD
 |------------|------|---------|
 | Redis | database/cache | Rate limit counters |
 | Auth Service | HTTP | Authentication endpoints |
-| Agent Service | HTTP/SSE | Agent and finance routes |
+| Agent Service | HTTP/SSE | Agent CRUD, conversations, and chat streaming |
+| Business Service | HTTP | Companies, partners, invoices, expenses, and summaries |
 | Knowledge Base Service | HTTP | Documents and retrieval |
 | Orchestrator Service | HTTP/SSE | Workflow routes |
 | python-jose | package | JWT validation |

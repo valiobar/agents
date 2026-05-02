@@ -28,9 +28,14 @@ async def lifespan(app: FastAPI):
         base_url=settings.business_service_url,
         timeout=settings.business_timeout_seconds,
     )
+    app.state.knowledge_http = httpx.AsyncClient(
+        base_url=settings.knowledge_service_url,
+        timeout=settings.knowledge_timeout_seconds,
+    )
     try:
         yield
     finally:
+        await app.state.knowledge_http.aclose()
         await app.state.business_http.aclose()
         close_db()
 

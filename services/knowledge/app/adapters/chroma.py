@@ -4,6 +4,7 @@ import asyncio
 from typing import Any
 
 import chromadb
+from chromadb.config import Settings as ChromaSettings
 
 from app.adapters.vector_store import VectorStore
 from app.config import settings
@@ -34,10 +35,16 @@ def _normalize_chroma_result(collection_name: str, result: dict[str, Any]) -> li
 
 class ChromaAdapter(VectorStore):
     def __init__(self) -> None:
+        # Disable client-side anonymized telemetry. ChromaDB's bundled posthog
+        # client emits "Failed to send telemetry event ClientStartEvent:
+        # capture() takes 1 positional argument but 3 were given" on every
+        # call when it sees a newer posthog API; the warnings flood logs and
+        # make it harder to spot real errors.
         self.client = chromadb.HttpClient(
             host=settings.chromadb_host,
             port=settings.chromadb_port,
             ssl=settings.chromadb_ssl,
+            settings=ChromaSettings(anonymized_telemetry=False),
         )
 
     def user_collection_name(self, user_id: str) -> str:

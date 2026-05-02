@@ -42,44 +42,10 @@ class PartnerCreate(BaseModel):
         return _none_if_blank(value)
 
 
-class PartnerUpdate(BaseModel):
-    kind: PartnerKind | None = None
-    name: str | None = Field(default=None, min_length=1, max_length=200)
-    registration_number: str | None = Field(default=None, min_length=1, max_length=64)
-    vat_number: str | None = Field(default=None, max_length=64)
-    city: str | None = Field(default=None, min_length=1, max_length=120)
-    country: str | None = Field(default=None, min_length=1, max_length=120)
-    address: str | None = Field(default=None, min_length=1, max_length=500)
-    accountable_person: str | None = Field(default=None, min_length=1, max_length=200)
-    email: EmailStr | None = None
-    phone: str | None = Field(default=None, max_length=64)
-    notes: str | None = Field(default=None, max_length=1000)
+class PartnerResponse(PartnerCreate):
+    model_config = ConfigDict(from_attributes=True)
 
-    @field_validator(
-        "name",
-        "registration_number",
-        "vat_number",
-        "city",
-        "country",
-        "address",
-        "accountable_person",
-        "phone",
-        "email",
-        "notes",
-        mode="before",
-    )
-    @classmethod
-    def normalize_optional_strings(cls, value: object) -> object | None:
-        return _none_if_blank(value)
-
-
-class PartnerInDB(PartnerCreate):
     id: str
     user_id: str
     created_at: datetime
     updated_at: datetime
-
-
-class PartnerResponse(PartnerInDB):
-    model_config = ConfigDict(from_attributes=True)
-

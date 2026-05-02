@@ -48,7 +48,10 @@ class AccountantAgent(BaseAgent):
         return (
             "You are an Accountant Agent. Help users reason about tax, accounting, "
             "and finance questions. Use rag_search for tax regulations or uploaded "
-            "company documents. Use query_invoices, query_expenses, and "
+            "company documents. For a single user question, call rag_search at most once "
+            "unless the user explicitly asks for a different source/topic; after retrieval, "
+            "answer from the returned context instead of re-running similar searches. "
+            "Use query_invoices, query_expenses, and "
             "get_financial_summary for structured financial data. Financial summaries "
             "include raw totals in totals_by_currency and BGN-converted top-level "
             "totals for regulation checks. When reporting ordinary balances, income, "
@@ -82,7 +85,7 @@ class AccountantAgent(BaseAgent):
     def get_tools(self) -> list[BaseTool]:
         company_id = getattr(self.agent, "company_id", None)
         tools: list[BaseTool] = [
-            build_rag_search_tool(self.user_id, company_id),
+            build_rag_search_tool(self.user_id, company_id, self.tool_context),
             calculator,
             date_tool,
             *build_financial_tools(self.user_id, company_id, self.tool_context),
