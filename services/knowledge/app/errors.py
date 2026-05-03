@@ -24,6 +24,13 @@ class EmptyDocumentError(KnowledgeBaseError):
     detail = "Document did not contain extractable text"
 
 
+class ExpenseExtractionFailedError(KnowledgeBaseError):
+    status_code = 502
+
+    def __init__(self, message: str = "Expense extraction failed") -> None:
+        self.detail = message
+
+
 class DocumentNotFoundError(KnowledgeBaseError):
     status_code = 404
 

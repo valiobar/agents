@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { useEffect, useMemo, useReducer, useRef } from "react";
 import { useSession } from "next-auth/react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { useConversation, useConversations } from "@/entities/conversation/api/queries";
+import { getConversationDisplayTitle } from "@/entities/conversation/model/display-title";
 import { MessageList } from "@/entities/conversation/ui/message-list";
 import { expenseKeys } from "@/entities/expense/model/query-keys";
 import { partnerKeys } from "@/entities/partner/model/query-keys";
@@ -43,14 +44,13 @@ export function ChatWindow({
     () => ({
       agent_id: agentId,
       company_id: companyId ?? null,
-      limit: 1,
+      limit: 20,
       offset: 0,
     }),
     [agentId, companyId],
   );
-  const latestConversationsQuery = useConversations(token, conversationListParams);
+  const conversationsQuery = useConversations(token, conversationListParams);
   const conversationQuery = useConversation(conversationId ?? "", token);
-  const [loadLatestConversation, setLoadLatestConversation] = useState(true);
 
   const initialState: ChatState = useMemo(
     () => ({
@@ -68,42 +68,32 @@ export function ChatWindow({
 
   const historyLoadedForConversation = useRef<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
+  const conversationsMenuRef = useRef<HTMLDetailsElement | null>(null);
 
   const isExtractingExpense = state.expenseDraftStatus === "loading";
   const isConfirmingExpense = state.expenseDraftStatus === "confirming";
   const isExpenseConfirmed = state.expenseDraftStatus === "confirmed";
+  const isAgentThinking =
+    state.status === "streaming" && state.streamingContent.length === 0;
   const hasActiveExpenseDraft =
     state.expenseDraftStatus === "loading" ||
     state.expenseDraftStatus === "ready" ||
     state.expenseDraftStatus === "confirming";
+  const latestMessage = state.messages.at(-1);
+  const latestMessageScrollKey = latestMessage
+    ? [
+        state.messages.length,
+        latestMessage.role,
+        latestMessage.content,
+        latestMessage.created_at ?? "",
+      ].join(":")
+    : "";
 
   useEffect(() => {
-    historyLoadedForConversation.current = null;
-    setLoadLatestConversation(true);
-  }, [agentId, companyId]);
-
-  useEffect(() => {
-    if (conversationId) return;
-    if (!loadLatestConversation) return;
-    if (!latestConversationsQuery.data) return;
-
-    const latestConversationId = latestConversationsQuery.data[0]?.id ?? null;
-    if (latestConversationId) {
-      setConversationId(agentId, companyId, latestConversationId);
-      return;
-    }
-
     clearConversationId(agentId, companyId);
+    historyLoadedForConversation.current = null;
     dispatch({ type: "RESET" });
-  }, [
-    agentId,
-    clearConversationId,
-    companyId,
-    conversationId,
-    loadLatestConversation,
-    latestConversationsQuery.data,
-    setConversationId,
-  ]);
+  }, [agentId, clearConversationId, companyId]);
 
   useEffect(() => {
     if (!conversationId) return;
@@ -123,8 +113,34 @@ export function ChatWindow({
   }, [agentId, clearConversationId, companyId, conversationId, conversationQuery.isError]);
 
   useEffect(() => {
+    if (!latestMessageScrollKey) return;
+
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [state.messages.length, state.streamingContent, state.expenseDraftStatus]);
+  }, [latestMessageScrollKey]);
+
+  useEffect(() => {
+    function handlePointerDown(event: PointerEvent) {
+      const menu = conversationsMenuRef.current;
+      const target = event.target;
+      if (!menu || !menu.open || !(target instanceof Node)) return;
+      if (menu.contains(target)) return;
+      menu.open = false;
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      if (conversationsMenuRef.current?.open) {
+        conversationsMenuRef.current.open = false;
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleEscape);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleEscape);
+    };
+  }, []);
 
   async function sendMessage(message: string) {
     if (!token) {
@@ -233,12 +249,12 @@ export function ChatWindow({
         },
       });
 
-      const partnerMessage =
-        response.vendor_partner?.status === "created"
-          ? " Supplier partner created."
-          : response.vendor_partner?.status === "matched"
-            ? " Supplier partner matched."
-            : "";
+      let partnerMessage = "";
+      if (response.vendor_partner?.status === "created") {
+        partnerMessage = " Supplier partner created.";
+      } else if (response.vendor_partner?.status === "matched") {
+        partnerMessage = " Supplier partner matched.";
+      }
       addNotification(`Expense recorded: ${response.expense.counterparty}.${partnerMessage}`, "success");
     } catch (error) {
       dispatch({ type: "EXPENSE_DRAFT_READY", payload: values });
@@ -247,8 +263,22 @@ export function ChatWindow({
   }
 
   function startNewConversation() {
-    setLoadLatestConversation(false);
+    if (conversationsMenuRef.current?.open) {
+      conversationsMenuRef.current.open = false;
+    }
     clearConversationId(agentId, companyId);
+    historyLoadedForConversation.current = null;
+    dispatch({ type: "RESET" });
+  }
+
+  function openConversation(nextConversationId: string) {
+    if (state.status === "streaming") return;
+    if (conversationId === nextConversationId) return;
+
+    if (conversationsMenuRef.current?.open) {
+      conversationsMenuRef.current.open = false;
+    }
+    setConversationId(agentId, companyId, nextConversationId);
     historyLoadedForConversation.current = null;
     dispatch({ type: "RESET" });
   }
@@ -259,18 +289,58 @@ export function ChatWindow({
         <div>
           <h2 className="text-sm font-medium">Chat</h2>
           <p className="text-xs text-muted-foreground">
-            Start a new conversation or continue the latest one.
+            Start a new conversation or reopen previous ones.
           </p>
         </div>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          onClick={startNewConversation}
-          disabled={state.status === "streaming" || (!conversationId && state.messages.length === 0)}
-        >
-          New conversation
-        </Button>
+        <div className="flex items-center gap-2">
+          <details ref={conversationsMenuRef} className="relative">
+            <summary
+              className={cn(
+                "list-none cursor-pointer rounded-md border border-input bg-background px-3 py-1.5 text-sm text-foreground shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground",
+                "focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+              )}
+            >
+              Conversations
+            </summary>
+            <div className="absolute right-0 z-10 mt-2 w-72 rounded-md border border-border bg-background p-2 text-foreground shadow-md">
+              {conversationsQuery.data?.length ? (
+                <div className="flex max-h-72 flex-col gap-1 overflow-y-auto">
+                  {conversationsQuery.data.map((conversation) => (
+                    <button
+                      key={conversation.id}
+                      type="button"
+                      disabled={state.status === "streaming" || conversation.id === conversationId}
+                      className={cn(
+                        "w-full rounded-md bg-background px-2 py-1.5 text-left text-sm transition-colors",
+                        conversation.id === conversationId
+                          ? "cursor-default bg-muted text-muted-foreground"
+                          : "hover:bg-accent hover:text-accent-foreground",
+                        state.status === "streaming" && "opacity-70",
+                      )}
+                      onClick={() => openConversation(conversation.id)}
+                    >
+                      {getConversationDisplayTitle(conversation)}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p className="px-2 py-1 text-sm text-muted-foreground">
+                  No previous conversations.
+                </p>
+              )}
+            </div>
+          </details>
+
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={startNewConversation}
+            disabled={state.status === "streaming" || (!conversationId && state.messages.length === 0)}
+          >
+            New conversation
+          </Button>
+        </div>
       </div>
 
       {state.status === "error" && state.error ? (
@@ -284,6 +354,15 @@ export function ChatWindow({
           messages={state.messages}
           streamingContent={state.streamingContent}
         />
+        {isAgentThinking ? (
+          <output
+            aria-live="polite"
+            className="mt-3 flex items-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground"
+          >
+            <Spinner />
+            <span>Agent is thinking...</span>
+          </output>
+        ) : null}
         {isExtractingExpense ? (
           <output
             className="mt-3 flex items-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground"
@@ -316,6 +395,7 @@ export function ChatWindow({
 
       <MessageInput
         disabled={state.status === "streaming" || isConfirmingExpense}
+        focusRequestKey={latestMessageScrollKey}
         receiptUploadDisabled={!companyId || state.status === "streaming" || hasActiveExpenseDraft}
         receiptUploadLoading={isExtractingExpense}
         onReceiptSelected={handleReceiptSelected}

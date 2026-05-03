@@ -23,6 +23,13 @@ async def connect_db() -> None:
         [("user_id", ASCENDING), ("agent_id", ASCENDING), ("company_id", ASCENDING), ("updated_at", DESCENDING)]
     )
     await db["conversations"].create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
+    await db["usage_events"].create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
+    await db["usage_events"].create_index(
+        [("user_id", ASCENDING), ("provider", ASCENDING), ("model", ASCENDING), ("created_at", DESCENDING)]
+    )
+    await db["usage_events"].create_index([("conversation_id", ASCENDING), ("created_at", ASCENDING)])
+    await db["usage_events"].create_index([("agent_id", ASCENDING), ("created_at", DESCENDING)])
+    await db["usage_events"].create_index([("idempotency_key", ASCENDING)], unique=True)
 
     await db["invoices"].create_index(
         [("user_id", ASCENDING), ("status", ASCENDING), ("issue_date", DESCENDING)]

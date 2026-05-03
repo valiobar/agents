@@ -10,8 +10,11 @@ The Agent Service owns agent instances, chat runtime orchestration, conversation
 - Accountant Agent runtime.
 - SSE chat streaming.
 - MongoDB conversation persistence.
+- Raw LLM usage ledger persistence in the Agent-owned `usage_events` collection.
 - LLM provider selection for OpenAI, Anthropic, DeepSeek, and Ollama.
 - LangChain `AgentExecutor` execution for model-requested tools.
+- Runtime lifecycle hooks for controlled agent-specific input/tool/event/chunk/final-output transformations.
+- Development-only agent loop logging with provider-reported token metadata tracing when available.
 - RAG access through the Knowledge Base Service `POST /retrieve` endpoint.
 - Safe arithmetic calculations through a restricted calculator tool.
 - Business HTTP access for company validation, partner lookup/write, invoice and expense query/write, and financial summary aggregation.
@@ -51,10 +54,12 @@ services/
 repositories/
   agent_repo.py
   conversation_repo.py
+  usage_repo.py
 models/
   agent.py
   chat.py
   conversation.py
+  usage.py
   company.py
   financial.py
   partner.py
@@ -62,8 +67,11 @@ models/
 runtime/
   base_agent.py
   accountant.py
+  hooks.py
+  loop_logging.py
   registry.py
   tool_context.py
+  usage.py
   providers/
     factory.py
     openai.py
@@ -81,8 +89,9 @@ tools/
 ## Main Patterns
 
 - **Layered architecture:** routes never touch MongoDB or service clients directly.
-- **Repository pattern:** Agent-owned MongoDB access is isolated.
+- **Repository pattern:** Agent-owned MongoDB access is isolated, including immutable raw usage events.
 - **Strategy pattern:** each agent type implements the shared `BaseAgent` contract.
+- **Hook contract:** concrete agents may override optional `BaseAgent` lifecycle hooks without replacing the shared event loop.
 - **Registry pattern:** `create_agent_runtime()` maps `agent_type` to a concrete runtime class.
 - **Factory pattern:** `LLMProviderFactory` creates provider wrappers for OpenAI, Anthropic, DeepSeek, and Ollama.
 - **Client adapter pattern:** `BusinessClient` wraps Business Service HTTP calls and translates HTTP failures into tool/service-safe errors.
@@ -94,7 +103,11 @@ The chat service loads the agent, creates the configured provider, resolves the 
 
 `BaseAgent.run()` creates a LangChain `AgentExecutor` for each turn. The executor receives the user input and recent chat history, executes model-requested tool calls, feeds tool results back to the model, and emits final user-facing chunks for SSE `token` events. If the provider does not produce streaming chunks, the runtime returns the executor's final output once.
 
-When the Agent Service runs with `AGENT_ENV=development`, `BaseAgent.run()` also logs LangChain tool start, end, and error events to the service console. These logs include bounded previews of tool inputs and outputs for debugging local tool behavior. Production defaults keep this logging disabled, and the runtime does not expose tool logs through SSE or conversation persistence.
+Concrete runtimes may override optional hooks defined by `BaseAgent`: `prepare_run_input()`, `prepare_tools()`, `on_run_start()`, `on_event()`, `on_chunk()`, `on_run_end()`, and `on_run_error()`. Hooks receive typed run-local objects from `runtime/hooks.py` and share one metadata dict for the turn. Hooks may mutate runtime inputs, tools, events, streamed text, final fallback output, metadata, and runtime usage event lists. They must not emit SSE, append messages, call FastAPI dependencies, or write repositories directly.
+
+When the Agent Service runs with `AGENT_ENV=development`, `BaseAgent.run()` also logs LangChain agent start/ready, tool start/end/error, LLM start/first-token/stream/end/slow/error, and heartbeat events to the service console. These logs include bounded previews of tool inputs and outputs for debugging local tool behavior. Provider token tracing is best-effort and depends on LangChain/provider metadata fields. Production defaults keep debug logging quiet except warnings/errors such as slow or failed model calls, and the runtime does not expose logs through SSE or conversation persistence.
+
+After a successful runtime run, `ChatService` drains `runtime.consume_usage_events()`. It persists filtered provider-reported token facts to `usage_events` only after conversation messages are saved. Usage persistence failures are logged but do not change an otherwise successful chat into an SSE `error`. The runtime and repository store raw token facts only; they do not calculate billing cost, enforce quotas, or apply model prices.
 
 Only `agent_type: "accountant"` is currently valid. The Accountant Agent can list and resolve companies, query invoices, query expenses, summarize financial records, search/create partners, search CompanyBook.BG for Bulgarian companies, import a selected registry company as a partner, create invoices, and record expenses. Business-domain reads and writes are delegated to Business Service. Invoice and expense write tools require explicit user confirmation before `confirmed=true` is sent to the tool.
 
@@ -143,6 +156,16 @@ Provider names are stored per agent in `config.provider`.
 
 Missing external-provider API keys fail during chat setup and are returned as SSE `error` events.
 
+## Agent-Owned Collections
+
+| Collection | Owner | Purpose | Key indexes |
+|------------|-------|---------|-------------|
+| `agents` | Agent Service | User-created agent configurations. | `user_id + created_at`, `user_id + name`, `user_id + company_id + created_at` |
+| `conversations` | Agent Service | User/assistant message history and conversation scope. | `user_id + agent_id + updated_at`, `user_id + agent_id + company_id + updated_at`, `user_id + created_at` |
+| `usage_events` | Agent Service | Immutable raw LLM usage facts for completed provider calls. | `user_id + created_at`, `user_id + provider + model + created_at`, `conversation_id + created_at`, `agent_id + created_at`, unique `idempotency_key` |
+
+`usage_events` records provider, model, optional LangChain `run_id`, LLM call index, token counts when reported, streaming chunk/character counts, started/completed timestamps, duration, and `source="agent_runtime"`. It is a raw ledger for future billing or analytics jobs, not a user-facing API contract.
+
 ## Restrictions
 
 - Every route must be `async def`.
@@ -150,5 +173,8 @@ Missing external-provider API keys fail during chat setup and are returned as SS
 - All user data must be scoped by `x-user-id`.
 - Do not call ChromaDB directly; use Knowledge Base Service for RAG.
 - Add MongoDB indexes for Agent-owned user, agent, and conversation filters.
+- Add MongoDB indexes for new Agent-owned usage queries and idempotency keys.
 - Do not reintroduce Business-owned repositories, routes, or services into Agent.
 - Financial and partner tool code must call `BusinessClient`, not MongoDB repositories, so REST and chat behavior stay consistent with Business Service.
+- Keep runtime hooks side-effect scoped: no direct SSE emission, repository writes, or FastAPI dependency access from `BaseAgent` subclasses.
+- Do not estimate token counts or compute billing cost in the runtime. Persist only provider-reported token metadata and apply prices in future billing/reporting code.

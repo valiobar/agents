@@ -1,4 +1,5 @@
 import httpx
+import inspect
 import logging
 from langchain_openai import ChatOpenAI
 
@@ -29,11 +30,19 @@ class OpenAIProvider(BaseLLMProvider):
                 settings.openai_chat_max_retries,
                 temperature,
             )
+        init_kwargs = {
+            "api_key": settings.openai_api_key,
+            "model": resolved_model,
+            "temperature": temperature,
+            "streaming": True,
+            "timeout": chat_timeout,
+            "max_retries": settings.openai_chat_max_retries,
+        }
+        if "stream_usage" in inspect.signature(ChatOpenAI.__init__).parameters:
+            init_kwargs["stream_usage"] = True
+        elif settings.is_development:
+            logger.info("openai_provider stream_usage unsupported by installed langchain-openai; continuing without it")
+
         return ChatOpenAI(
-            api_key=settings.openai_api_key,
-            model=resolved_model,
-            temperature=temperature,
-            streaming=True,
-            timeout=chat_timeout,
-            max_retries=settings.openai_chat_max_retries,
+            **init_kwargs,
         )

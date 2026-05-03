@@ -80,7 +80,8 @@ sequenceDiagram
     participant Client
     participant Gateway
     participant Agent
-    participant Runtime as AgentExecutor
+    participant Runtime as BaseAgent
+    participant Executor as AgentExecutor
     participant KB as Knowledge Base
     participant Business
     participant LLM
@@ -99,24 +100,30 @@ sequenceDiagram
         Agent->>Mongo: load and validate conversation
     end
     Agent-->>Gateway: event: start
-    Agent->>Runtime: message + recent history
-    Runtime->>LLM: prompt + history + available tools
-    LLM-->>Runtime: tool calls or final chunks
+    Agent->>Runtime: run(message, recent history)
+    Runtime->>Runtime: prepare_run_input() and prepare_tools()
+    Runtime->>Executor: prompt + history + available tools
+    Executor->>LLM: prompt + history + available tools
+    LLM-->>Executor: tool calls or final chunks
     opt model invokes rag_search
-        Runtime->>KB: POST /retrieve with x-user-id and company_id
-        KB-->>Runtime: relevant chunks
+        Executor->>KB: POST /retrieve with x-user-id and company_id
+        KB-->>Executor: relevant chunks
     end
     opt model invokes company/partner/financial tool
-        Runtime->>Business: HTTP request through BusinessClient + x-user-id
-        Business-->>Runtime: validated domain response
+        Executor->>Business: HTTP request through BusinessClient + x-user-id
+        Business-->>Executor: validated domain response
     end
-    Runtime->>LLM: tool results for final response
-    LLM-->>Runtime: streamed final chunks
+    Executor->>LLM: tool results for final response
+    LLM-->>Executor: streamed final chunks
+    Executor-->>Runtime: LangChain stream events
+    Runtime->>Runtime: on_event(), on_chunk(), collect usage metadata
     Runtime-->>Agent: token chunks
     Agent-->>Gateway: event: token
     Gateway-->>Client: event: token
+    Agent->>Runtime: consume_usage_events()
     Agent->>Mongo: persist messages
     alt persistence succeeded
+        Agent->>Mongo: insert usage_events
         Agent-->>Gateway: event: done
         Gateway-->>Client: event: done
     else provider/runtime/persistence failed
@@ -125,7 +132,9 @@ sequenceDiagram
     end
 ```
 
-Provider and runtime setup happens before new conversation creation, so setup errors emit `error` without inserting an empty conversation. `done` is emitted only after the user and assistant messages are persisted.
+Provider and runtime setup happens before new conversation creation, so setup errors emit `error` without inserting an empty conversation. `done` is emitted only after the user and assistant messages are persisted. Raw provider usage events are inserted after message persistence; usage insert failures are logged but do not replace a successful chat with an SSE `error`.
+
+Runtime hooks are internal to `BaseAgent`. They may transform inputs, tools, normalized LangChain events, streamed chunks, final fallback output, and run metadata before the Agent Service emits SSE or writes MongoDB. Hooks must not emit SSE or persist data directly.
 
 ## SSE Events
 
@@ -136,6 +145,30 @@ Provider and runtime setup happens before new conversation creation, so setup er
 | `token` | `{ "content": "..." }` | One streamed assistant chunk. |
 | `error` | `{ "message": "..." }` | Terminal error for lookup, provider setup, runtime execution, or message persistence. |
 | `done` | `{ "conversation_id": "..." }` | Messages were persisted after successful runtime completion. |
+
+The public SSE event names and payloads do not include usage data. Usage is stored internally in `usage_events` for future billing or analytics.
+
+## Runtime Usage Flow
+
+```mermaid
+sequenceDiagram
+    participant Runtime as BaseAgent
+    participant Logger as AgentLoopLogger
+    participant Chat as ChatService
+    participant UsageRepo
+    participant Mongo
+
+    Runtime->>Logger: track LangChain LLM stream/end events
+    Logger->>Logger: extract provider token metadata
+    Logger-->>Runtime: LLMUsageEvent values
+    Runtime-->>Chat: consume_usage_events()
+    Chat->>Chat: keep only events with provider-reported token fields
+    Chat->>Mongo: append user and assistant messages
+    Chat->>UsageRepo: insert_many(UsageEventCreate[])
+    UsageRepo->>Mongo: insert usage_events with idempotency_key
+```
+
+The usage ledger records raw provider/model facts only: user, agent, conversation, provider, model, optional run id, LLM call index, input/output/total token counts when reported, stream chunk/character counts, timing, and `source="agent_runtime"`. It does not estimate missing tokens and does not compute billing cost.
 
 ## RAG Tool Flow
 
@@ -235,6 +268,7 @@ The import tool reuses existing partners by exact UIC before making a new write.
 | Partners | Gateway or Agent partner tools -> Business partner routes/client -> Business partner service -> Business partner repo -> MongoDB |
 | Agent config | Gateway -> Agent routes -> Agent service -> Agent repo -> MongoDB |
 | Conversation messages | Chat service -> Conversation repo -> MongoDB |
+| LLM usage events | Chat service after conversation persistence -> Usage repo -> MongoDB `usage_events` |
 | Invoices | Gateway or Agent `create_invoice` tool -> Business invoice route/client -> Business invoice service -> Business invoice repo -> MongoDB |
 | Expenses | Gateway or Agent `record_expense` tool -> Business expense route/client -> Business expense service -> Business expense repo -> MongoDB |
 | CompanyBook partner import | Accountant tool -> CompanyBook.BG API -> Business partner route/client -> Business partner service -> Business partner repo -> MongoDB |

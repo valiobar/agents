@@ -455,7 +455,7 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
 }
 ```
 
-When streaming completes, the finalized message is also written to the TanStack Query cache (conversation history) so it persists across navigations without a refetch. Chat history is scoped by the agent's selected company: `widgets/chat-window` loads the latest `GET /conversations?agent_id=...&company_id=...&limit=1` result on open, and `shared/store/chat-store.ts` keeps local conversation ids by `agentId:companyId`.
+When streaming completes, the finalized message is also written to the TanStack Query cache (conversation history) so it persists across navigations without a refetch. Chat history is scoped by the agent's selected company: `widgets/chat-window` opens in a fresh state (no implicit latest-history restore), fetches scoped conversation summaries for the history menu via `GET /conversations?agent_id=...&company_id=...&limit=20`, and loads full history only when the user explicitly selects a conversation. `shared/store/chat-store.ts` keeps the currently opened conversation id by `agentId:companyId`.
 
 The generic SSE parser in `shared/api/sse.ts` uses `fetch()` with `Accept: text/event-stream`, which allows authenticated POST streams to `POST /agents/{id}/chat`. The chat widget dispatches actions as events arrive.
 

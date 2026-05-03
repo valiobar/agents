@@ -11,7 +11,7 @@ from asyncio import sleep
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.models.expense_extraction import ExpenseDraft, ExtractedExpenseItem
-from app.services.expense_extraction_provider import _build_openai_upload_part
+from app.services.expense_extraction_provider import _build_openai_upload_part, _sanitize_draft
 from app.services.expense_extraction_service import ExpenseExtractionService
 
 
@@ -107,6 +107,59 @@ class ExpenseExtractionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(draft.deductible_rate, Decimal("1"))
         assert draft.items is not None
         self.assertEqual(draft.items[0].vat_rate, Decimal("0.2"))
+
+    def test_sanitize_draft_defaults_missing_counterparty(self) -> None:
+        data = _sanitize_draft(
+            {
+                "expense_date": "2026-03-01",
+                "amount": "12.50",
+                "currency": "EUR",
+                "category": "meals",
+                "deductible": True,
+                "deductible_rate": "1.0",
+                "source_document_type": "receipt",
+                "confidence": 0.95,
+                "warnings": [],
+            }
+        )
+
+        draft = ExpenseDraft.model_validate(data)
+
+        self.assertEqual(draft.counterparty, "Unknown counterparty")
+        self.assertIn("Counterparty was missing", draft.warnings[0])
+
+    def test_sanitize_draft_infers_counterparty_from_vendor_partner(self) -> None:
+        data = _sanitize_draft(
+            {
+                "counterparty": "",
+                "expense_date": "2026-03-01",
+                "amount": "12.50",
+                "currency": "EUR",
+                "category": "professional_services",
+                "deductible": True,
+                "deductible_rate": "1.0",
+                "source_document_type": "invoice",
+                "vendor_partner": {
+                    "name": "Consulting Ltd",
+                    "registration_number": None,
+                    "vat_number": None,
+                    "city": None,
+                    "country": "Bulgaria",
+                    "address": None,
+                    "accountable_person": None,
+                    "email": None,
+                    "phone": None,
+                    "confidence": 0.9,
+                    "warnings": [],
+                },
+                "confidence": 0.95,
+                "warnings": [],
+            }
+        )
+
+        draft = ExpenseDraft.model_validate(data)
+
+        self.assertEqual(draft.counterparty, "Consulting Ltd")
 
     async def test_extract_loads_text_for_supported_types_and_passes_to_provider(self) -> None:
         provider = FakeProvider()

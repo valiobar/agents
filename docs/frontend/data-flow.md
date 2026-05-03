@@ -134,6 +134,33 @@ sequenceDiagram
 
 The stream is implemented with `fetch()` rather than `EventSource` because chat uses authenticated `POST /agents/{id}/chat`. The gateway keeps the upstream `httpx` stream open until the downstream browser stream completes.
 
+Opening the chat widget now starts a fresh conversation by default. Previous conversations are listed in a scoped history menu, and persisted messages are loaded only after an explicit user selection.
+
+## Conversation History Reopen Flow
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Widget as Chat Widget
+    participant Query as TanStack Query
+    participant API as shared/api/client
+    participant GW as API Gateway
+
+    User->>Widget: open chat for agent/company
+    Widget->>Widget: reset local chat state (fresh conversation)
+    Widget->>Query: useConversations(agent_id, company_id, limit=20)
+    Query->>API: GET /conversations?agent_id=...&company_id=...&limit=20&offset=0
+    API->>GW: HTTP with access token
+    GW-->>API: conversation summaries (newest first)
+    API-->>Query: typed conversation list
+    Query-->>Widget: render history menu entries
+    User->>Widget: select a previous conversation
+    Widget->>API: GET /conversations/{conversation_id}
+    API->>GW: HTTP with access token
+    GW-->>API: full conversation with messages
+    API-->>Widget: load selected history into chat state
+```
+
 ## Form Mutation Flow
 
 ```mermaid

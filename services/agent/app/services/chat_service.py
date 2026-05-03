@@ -8,8 +8,10 @@ import logging
 from app.config import settings
 from app.models.chat import ChatRequest
 from app.models.conversation import MessageSchema
+from app.models.usage import UsageEventCreate
 from app.repositories.agent_repo import AgentRepository
 from app.repositories.conversation_repo import ConversationRepository
+from app.repositories.usage_repo import UsageRepository
 from app.runtime.providers.factory import LLMProviderFactory
 from app.runtime.registry import create_agent_runtime
 from app.runtime.tool_context import ToolContext
@@ -26,10 +28,12 @@ class ChatService:
         self,
         agent_repo: AgentRepository,
         conversation_repo: ConversationRepository,
+        usage_repo: UsageRepository,
         tool_context: ToolContext,
     ) -> None:
         self.agent_repo = agent_repo
         self.conversation_repo = conversation_repo
+        self.usage_repo = usage_repo
         self.tool_context = tool_context
 
     async def stream_chat(
@@ -72,12 +76,14 @@ class ChatService:
         history = conversation.messages[-settings.max_history_messages :]
 
         assistant_parts: list[str] = []
+        runtime_usage_events = []
         yield sse("start", {"conversation_id": conversation.id})
 
         try:
             async for token in runtime.run(payload.message, history):
                 assistant_parts.append(token)
                 yield sse("token", {"content": token})
+            runtime_usage_events = runtime.consume_usage_events()
         except Exception as exc:
             yield sse("error", {"message": str(exc)})
             return
@@ -106,4 +112,28 @@ class ChatService:
             )
             yield sse("error", {"message": "Failed to persist conversation messages"})
             return
+
+        usage_events = [
+            UsageEventCreate.from_runtime_event(
+                event,
+                conversation_id=conversation.id,
+                created_at=now,
+            )
+            for event in runtime_usage_events
+            if event.input_tokens is not None
+            or event.output_tokens is not None
+            or event.total_tokens is not None
+        ]
+        try:
+            await self.usage_repo.insert_many(usage_events)
+        except Exception:
+            logger.exception(
+                "failed_to_persist_usage_events",
+                extra={
+                    "user_id": user_id,
+                    "agent_id": agent.id,
+                    "conversation_id": conversation.id,
+                },
+            )
+
         yield sse("done", {"conversation_id": conversation.id})

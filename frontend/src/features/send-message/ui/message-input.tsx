@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "@/shared/ui/button";
 import { Spinner } from "@/shared/ui/spinner";
@@ -8,12 +8,14 @@ import { Textarea } from "@/shared/ui/textarea";
 
 export function MessageInput({
   disabled,
+  focusRequestKey,
   receiptUploadDisabled,
   receiptUploadLoading,
   onSend,
   onReceiptSelected,
 }: Readonly<{
   disabled?: boolean;
+  focusRequestKey?: string;
   receiptUploadDisabled?: boolean;
   receiptUploadLoading?: boolean;
   onSend: (message: string) => void | Promise<void>;
@@ -22,12 +24,30 @@ export function MessageInput({
   const [value, setValue] = useState("");
   const trimmed = useMemo(() => value.trim(), [value]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const lastFocusRequestKeyRef = useRef(focusRequestKey);
+  const pendingFocusRef = useRef(false);
+
+  useLayoutEffect(() => {
+    if (focusRequestKey !== lastFocusRequestKeyRef.current) {
+      lastFocusRequestKeyRef.current = focusRequestKey;
+      pendingFocusRef.current = Boolean(focusRequestKey);
+    }
+    if (disabled || !pendingFocusRef.current) return;
+
+    pendingFocusRef.current = false;
+    textareaRef.current?.focus();
+    globalThis.setTimeout(() => textareaRef.current?.focus(), 0);
+  }, [disabled, focusRequestKey]);
 
   const submit = useCallback(async () => {
     if (disabled) return;
     if (!trimmed) return;
+    const message = trimmed;
+    pendingFocusRef.current = true;
     setValue("");
-    await onSend(trimmed);
+    textareaRef.current?.focus();
+    await onSend(message);
   }, [disabled, onSend, trimmed]);
 
   const uploadLabel = receiptUploadLoading ? "Processing document..." : "Attach document";
@@ -58,6 +78,7 @@ export function MessageInput({
           {uploadLabel}
         </Button>
         <Textarea
+          ref={textareaRef}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           placeholder="Message your agent…"

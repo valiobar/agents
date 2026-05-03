@@ -9,6 +9,7 @@ from app.clients.knowledge import KnowledgeClient
 from app.config import settings
 from app.repositories.agent_repo import AgentRepository
 from app.repositories.conversation_repo import ConversationRepository
+from app.repositories.usage_repo import UsageRepository
 from app.runtime.tool_context import ToolContext
 from app.services.agent_service import AgentService
 from app.services.companybook_service import CompanyBookService
@@ -39,6 +40,10 @@ def get_conversation_repo(
     db: AsyncIOMotorDatabase = Depends(get_db),
 ) -> ConversationRepository:
     return ConversationRepository(db)
+
+
+def get_usage_repo(db: AsyncIOMotorDatabase = Depends(get_db)) -> UsageRepository:
+    return UsageRepository(db)
 
 
 def get_companybook_service() -> CompanyBookService:
@@ -95,9 +100,10 @@ def get_tool_context(
 def get_chat_service(
     agent_repo: AgentRepository = Depends(get_agent_repo),
     conversation_repo: ConversationRepository = Depends(get_conversation_repo),
+    usage_repo: UsageRepository = Depends(get_usage_repo),
     tool_context: ToolContext = Depends(get_tool_context),
 ) -> ChatService:
-    return ChatService(agent_repo, conversation_repo, tool_context)
+    return ChatService(agent_repo, conversation_repo, usage_repo, tool_context)
 
 
 def get_conversation_service(

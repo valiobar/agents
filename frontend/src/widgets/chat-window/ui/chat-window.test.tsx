@@ -1,7 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
-import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 
+import type { Conversation } from "@/entities/conversation/model/types";
 import type { ExpenseDraftResponse } from "@/entities/expense/model/types";
 import type { ConfirmExtractedExpenseResponse } from "@/features/send-message/model/receipt-expense-schema";
 import { ApiError } from "@/shared/api/errors";
@@ -13,14 +14,22 @@ const {
   mockCreateExpenseDraft,
   mockConfirmExtractedExpense,
   mockAddNotification,
-  mockEmptyConversations,
+  mockConversationsQueryData,
   mockConversationQuery,
+  mockStreamAgentMessage,
+  mockSetConversationId,
+  mockClearConversationId,
+  mockChatStoreState,
 } = vi.hoisted(() => ({
   mockCreateExpenseDraft: vi.fn(),
   mockConfirmExtractedExpense: vi.fn(),
   mockAddNotification: vi.fn(),
-  mockEmptyConversations: [] as unknown[],
-  mockConversationQuery: { data: null, isError: false },
+  mockConversationsQueryData: [] as Conversation[],
+  mockConversationQuery: { data: null as Conversation | null, isError: false },
+  mockStreamAgentMessage: vi.fn(),
+  mockSetConversationId: vi.fn(),
+  mockClearConversationId: vi.fn(),
+  mockChatStoreState: { conversationId: null as string | null },
 }));
 
 vi.mock("next-auth/react", () => ({
@@ -28,29 +37,31 @@ vi.mock("next-auth/react", () => ({
 }));
 
 vi.mock("@/entities/conversation/api/queries", () => ({
-  useConversations: () => ({ data: mockEmptyConversations, isError: false }),
+  useConversations: () => ({ data: mockConversationsQueryData, isError: false }),
   useConversation: () => mockConversationQuery,
 }));
 
-vi.mock("@/shared/store/chat-store", () => {
-  const store = {
-    getConversationId: () => null,
-    setConversationId: vi.fn(),
-    clearConversationId: vi.fn(),
-  };
-  return {
-    useChatStore: (selector: (s: typeof store) => unknown) => selector(store),
-  };
-});
+vi.mock("@/shared/store/chat-store", () => ({
+  useChatStore: (
+    selector: (s: {
+      getConversationId: () => string | null;
+      setConversationId: typeof mockSetConversationId;
+      clearConversationId: typeof mockClearConversationId;
+    }) => unknown,
+  ) =>
+    selector({
+      getConversationId: () => mockChatStoreState.conversationId,
+      setConversationId: mockSetConversationId,
+      clearConversationId: mockClearConversationId,
+    }),
+}));
 
 vi.mock("@/shared/store/notification-store", () => ({
   useNotificationStore: () => ({ addNotification: mockAddNotification }),
 }));
 
 vi.mock("@/features/send-message/api/stream-message", () => ({
-  streamAgentMessage: async function* streamAgentMessage() {
-    yield { event: "done", data: { conversation_id: "c1" } };
-  },
+  streamAgentMessage: (...args: unknown[]) => mockStreamAgentMessage(...args),
 }));
 
 vi.mock("@/features/send-message/api/receipt-expense", () => ({
@@ -60,12 +71,12 @@ vi.mock("@/features/send-message/api/receipt-expense", () => ({
 
 vi.mock("@/entities/conversation/ui/message-list", () => ({
   MessageList: ({ messages, streamingContent }: {
-    messages: Array<{ content: string }>;
+    messages: Array<{ content: string; created_at?: string; role?: string }>;
     streamingContent?: string;
   }) => (
     <div data-testid="message-list">
-      {messages.map((message, index) => (
-        <p key={index}>{message.content}</p>
+      {messages.map((message) => (
+        <p key={`${message.role ?? "message"}:${message.created_at ?? ""}:${message.content}`}>{message.content}</p>
       ))}
       {streamingContent ? <p>{streamingContent}</p> : null}
     </div>
@@ -231,12 +242,200 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+function makeConversation(overrides: Partial<Conversation> = {}): Conversation {
+  return {
+    id: "conversation-1",
+    agent_id: "agent-1",
+    company_id: "company-1",
+    title: "Old conversation title",
+    messages: [],
+    created_at: "2026-05-01T00:00:00Z",
+    updated_at: "2026-05-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
+function getFileInput() {
+  const input = document.querySelector('input[type="file"]') as HTMLInputElement | null;
+  if (!input) throw new Error("Expected file input to exist");
+  return input;
+}
+
 describe("ChatWindow", () => {
-  function getFileInput() {
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement | null;
-    if (!input) throw new Error("Expected file input to exist");
-    return input;
-  }
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockConversationsQueryData.length = 0;
+    mockConversationQuery.data = null;
+    mockConversationQuery.isError = false;
+    mockChatStoreState.conversationId = null;
+
+    mockSetConversationId.mockImplementation((_agentId, _companyId, conversationId) => {
+      mockChatStoreState.conversationId = conversationId;
+    });
+    mockClearConversationId.mockImplementation(() => {
+      mockChatStoreState.conversationId = null;
+    });
+    mockStreamAgentMessage.mockImplementation(async function* () {
+      yield { event: "done", data: { conversation_id: "c1" } };
+    });
+  });
+
+  it("starts with a new empty conversation on agent open", () => {
+    mockConversationsQueryData.push(
+      makeConversation({
+        id: "old-1",
+        messages: [{ role: "user", content: "old message", created_at: "2026-05-01T00:00:00Z", metadata: {} }],
+      }),
+    );
+    mockChatStoreState.conversationId = null;
+
+    renderWithProviders(<ChatWindow agentId="agent-1" companyId="company-1" />);
+
+    expect(within(screen.getByTestId("message-list")).queryByText("old message")).not.toBeInTheDocument();
+    expect(screen.getByText(/start a new conversation/i)).toBeInTheDocument();
+  });
+
+  it("shows old conversations in a menu using the latest message as title", async () => {
+    const user = userEvent.setup();
+
+    mockConversationsQueryData.push(
+      makeConversation({
+        id: "old-1",
+        messages: [
+          { role: "user", content: "first message", created_at: "2026-05-01T00:00:00Z", metadata: {} },
+          {
+            role: "assistant",
+            content: "latest assistant answer with details",
+            created_at: "2026-05-01T00:01:00Z",
+            metadata: {},
+          },
+        ],
+      }),
+    );
+
+    renderWithProviders(<ChatWindow agentId="agent-1" companyId="company-1" />);
+    await user.click(screen.getByText(/conversations/i));
+
+    expect(screen.getByRole("button", { name: /latest assistant answer with details/i })).toBeInTheDocument();
+  });
+
+  it("reopens a selected old conversation from the menu", async () => {
+    const user = userEvent.setup();
+
+    mockConversationsQueryData.push(
+      makeConversation({
+        id: "old-1",
+        title: "Old conversation title",
+      }),
+    );
+    mockConversationQuery.data = makeConversation({
+      id: "old-1",
+      messages: [{ role: "user", content: "reopened history", created_at: "2026-05-01T00:02:00Z", metadata: {} }],
+    });
+    mockConversationQuery.isError = false;
+
+    renderWithProviders(<ChatWindow agentId="agent-1" companyId="company-1" />);
+    await user.click(screen.getByText(/conversations/i));
+    await user.click(screen.getByRole("button", { name: /old conversation title/i }));
+
+    expect(mockSetConversationId).toHaveBeenCalledWith("agent-1", "company-1", "old-1");
+    expect(await screen.findByText("reopened history")).toBeInTheDocument();
+  });
+
+  it("shows thinking feedback before the first streamed token", async () => {
+    const user = userEvent.setup();
+    const firstTokenGate = deferred<void>();
+
+    mockStreamAgentMessage.mockImplementationOnce(async function* () {
+      yield { event: "conversation", data: { conversation_id: "c1" } };
+      await firstTokenGate.promise;
+      yield { event: "token", data: { content: "partial" } };
+      yield { event: "done", data: { conversation_id: "c1" } };
+    });
+
+    renderWithProviders(<ChatWindow agentId="agent-1" companyId="company-1" />);
+    await user.type(screen.getByPlaceholderText(/message your agent/i), "hello{Enter}");
+
+    expect(await screen.findByText(/agent is thinking/i)).toBeInTheDocument();
+
+    await act(async () => {
+      firstTokenGate.resolve(undefined);
+    });
+    await waitFor(() => {
+      expect(screen.getByText("partial")).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(/agent is thinking/i)).not.toBeInTheDocument();
+    });
+  });
+
+  it("renders streamed tokens before the done event completes", async () => {
+    const user = userEvent.setup();
+    const doneGate = deferred<void>();
+
+    mockStreamAgentMessage.mockImplementationOnce(async function* () {
+      yield { event: "conversation", data: { conversation_id: "c1" } };
+      yield { event: "token", data: { content: "partial" } };
+      await doneGate.promise;
+      yield { event: "done", data: { conversation_id: "c1" } };
+    });
+
+    renderWithProviders(<ChatWindow agentId="agent-1" companyId="company-1" />);
+    await user.type(screen.getByPlaceholderText(/message your agent/i), "hello{Enter}");
+
+    expect(await screen.findByText("partial")).toBeInTheDocument();
+    await act(async () => {
+      doneGate.resolve(undefined);
+    });
+  });
+
+  it("refocuses the message input after a new assistant message is added", async () => {
+    const user = userEvent.setup();
+    const doneGate = deferred<void>();
+
+    mockStreamAgentMessage.mockImplementationOnce(async function* () {
+      yield { event: "conversation", data: { conversation_id: "c1" } };
+      yield { event: "token", data: { content: "partial" } };
+      await doneGate.promise;
+      yield { event: "done", data: { conversation_id: "c1" } };
+    });
+
+    renderWithProviders(<ChatWindow agentId="agent-1" companyId="company-1" />);
+    const textarea = screen.getByPlaceholderText(/message your agent/i);
+    await user.type(textarea, "hello{Enter}");
+    expect(await screen.findByText("partial")).toBeInTheDocument();
+
+    const focusTarget = document.createElement("button");
+    document.body.appendChild(focusTarget);
+    focusTarget.focus();
+    expect(focusTarget).toHaveFocus();
+
+    await act(async () => {
+      doneGate.resolve(undefined);
+    });
+    await waitFor(() => {
+      expect(textarea).toHaveFocus();
+    });
+    focusTarget.remove();
+  });
+
+  it("scrolls when a new chat message is added", async () => {
+    const user = userEvent.setup();
+    const scrollSpy = vi.spyOn(Element.prototype, "scrollIntoView");
+
+    mockStreamAgentMessage.mockImplementationOnce(async function* () {
+      yield { event: "token", data: { content: "token" } };
+      yield { event: "done", data: { conversation_id: "c1" } };
+    });
+
+    renderWithProviders(<ChatWindow agentId="agent-1" companyId="company-1" />);
+    await user.type(screen.getByPlaceholderText(/message your agent/i), "hello{Enter}");
+
+    await waitFor(() => {
+      expect(scrollSpy).toHaveBeenCalledWith({ behavior: "smooth", block: "end" });
+    });
+    scrollSpy.mockRestore();
+  });
 
   it("upload is disabled when the agent has no company", () => {
     renderWithProviders(<ChatWindow agentId="agent-1" companyId={null} />);

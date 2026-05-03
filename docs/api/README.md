@@ -242,13 +242,13 @@ data: {"message":"OPENAI_API_KEY is required for OpenAI agents"}
 ### List Conversations
 
 ```http
-GET /conversations?agent_id={agent_id}&company_id={company_id}&limit=1&offset=0
+GET /conversations?agent_id={agent_id}&company_id={company_id}&limit=20&offset=0
 ```
 
-Lists conversations for one authenticated user's agent and company scope, newest first. Omit `company_id` to list conversations created while the agent was unassigned. The frontend uses `limit=1` on chat open to restore the latest history for the selected agent company.
+Lists conversations for one authenticated user's agent and company scope, newest first. Omit `company_id` to list conversations created while the agent was unassigned. The frontend uses this endpoint to populate the chat history menu and then loads full message history with `GET /conversations/{conversation_id}` for an explicit user selection.
 
 ```bash
-curl "http://localhost:8000/conversations?agent_id=$AGENT_ID&company_id=$COMPANY_ID&limit=1&offset=0" \
+curl "http://localhost:8000/conversations?agent_id=$AGENT_ID&company_id=$COMPANY_ID&limit=20&offset=0" \
   -H "Authorization: Bearer $TOKEN"
 ```
 

@@ -9,6 +9,7 @@ from typing import Any, Protocol
 from openai import AsyncOpenAI
 from pydantic import ValidationError
 
+from app.errors import ExpenseExtractionFailedError
 from app.models.expense_extraction import ExpenseDraft, ExpenseDraftRequestSourceDocumentType
 
 logger = logging.getLogger(__name__)
@@ -76,6 +77,8 @@ def _build_extraction_prompt(
         "- Return valid JSON only. Do not include markdown, comments, trailing commas, or unquoted values.\n"
         "- Use `confidence` in [0, 1].\n"
         "- Add human-readable strings to `warnings` when you infer or default values.\n"
+        "- Always set `counterparty` to the vendor, merchant, supplier, or payee name. "
+        "If no name is visible, set it to \"Unknown counterparty\" and add a warning.\n"
         "- If the document number is visible (invoice/receipt number, reference, etc.), set `source_document_number`.\n"
         "- Quote every identifier-like value as a string, including document numbers, registration numbers, VAT numbers, SKU values, and barcodes. Preserve leading zeros.\n"
         "- Quote every decimal amount, quantity, unit price, VAT rate, and deductible rate as a string, for example \"24.01\", \"1\", \"0.20\", or \"1.0\".\n"
@@ -152,6 +155,21 @@ def _sanitize_item(item: dict[str, Any]) -> dict[str, Any]:
 
 def _sanitize_draft(data: dict[str, Any]) -> dict[str, Any]:
     """Best-effort cleanup of raw LLM JSON before Pydantic validation."""
+    counterparty = data.get("counterparty")
+    if not isinstance(counterparty, str) or not counterparty.strip():
+        vendor_partner = data.get("vendor_partner")
+        vendor_name = vendor_partner.get("name") if isinstance(vendor_partner, dict) else None
+        data["counterparty"] = (
+            vendor_name.strip()
+            if isinstance(vendor_name, str) and vendor_name.strip()
+            else "Unknown counterparty"
+        )
+        warnings = data.get("warnings")
+        if not isinstance(warnings, list):
+            warnings = []
+        warnings.append("Counterparty was missing and was inferred or defaulted.")
+        data["warnings"] = warnings
+
     if isinstance(data.get("items"), list):
         data["items"] = [_sanitize_item(it) for it in data["items"] if isinstance(it, dict)]
     return data
@@ -281,6 +299,8 @@ class OpenAIExpenseExtractionProvider:
             draft = ExpenseDraft.model_validate(data)
         except ValidationError as exc:
             logger.error("Expense draft schema validation failed: %s", exc)
-            raise
+            raise ExpenseExtractionFailedError(
+                "Expense extraction returned an invalid draft. Please try another image or enter the expense manually."
+            ) from exc
 
         return draft.model_copy(update={"source_document_id": source_document_id})
