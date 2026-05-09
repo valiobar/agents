@@ -2,13 +2,17 @@ from __future__ import annotations
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
-from app.models.agent import AgentInDB, AgentType
+from app.models.shared.agent import AgentInDB, AgentType
 from app.runtime.accountant import AccountantAgent
 from app.runtime.base_agent import BaseAgent
+from app.runtime.inventory import InventoryAgent
+from app.runtime.router import RouterAgent
 from app.runtime.tool_context import ToolContext
 
 AGENT_REGISTRY: dict[AgentType, type[BaseAgent]] = {
     "accountant": AccountantAgent,
+    "inventory": InventoryAgent,
+    "router": RouterAgent,
 }
 
 

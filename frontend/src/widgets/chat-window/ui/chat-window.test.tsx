@@ -20,6 +20,8 @@ const {
   mockSetConversationId,
   mockClearConversationId,
   mockChatStoreState,
+  mockGetSession,
+  mockSignOut,
 } = vi.hoisted(() => ({
   mockCreateExpenseDraft: vi.fn(),
   mockConfirmExtractedExpense: vi.fn(),
@@ -30,10 +32,14 @@ const {
   mockSetConversationId: vi.fn(),
   mockClearConversationId: vi.fn(),
   mockChatStoreState: { conversationId: null as string | null },
+  mockGetSession: vi.fn(),
+  mockSignOut: vi.fn(),
 }));
 
 vi.mock("next-auth/react", () => ({
   useSession: () => ({ data: { accessToken: "token-1" } }),
+  getSession: () => mockGetSession(),
+  signOut: (...args: unknown[]) => mockSignOut(...args),
 }));
 
 vi.mock("@/entities/conversation/api/queries", () => ({
@@ -268,6 +274,7 @@ describe("ChatWindow", () => {
     mockConversationQuery.data = null;
     mockConversationQuery.isError = false;
     mockChatStoreState.conversationId = null;
+    mockGetSession.mockResolvedValue({ accessToken: "token-1" });
 
     mockSetConversationId.mockImplementation((_agentId, _companyId, conversationId) => {
       mockChatStoreState.conversationId = conversationId;
@@ -387,6 +394,90 @@ describe("ChatWindow", () => {
     await act(async () => {
       doneGate.resolve(undefined);
     });
+  });
+
+  it("ignores route events and still completes streamed response", async () => {
+    const user = userEvent.setup();
+    mockStreamAgentMessage.mockImplementationOnce(async function* () {
+      yield { event: "conversation", data: { conversation_id: "c1" } };
+      yield {
+        event: "route",
+        data: {
+          predicted_route: "general",
+          executed_route: "general",
+          reason: "greeting",
+          confidence: 0.91,
+          company_id: null,
+          company_scope: "unassigned",
+        },
+      };
+      yield { event: "token", data: { content: "Hello" } };
+      yield { event: "done", data: { conversation_id: "c1" } };
+    });
+
+    renderWithProviders(<ChatWindow agentId="agent-1" companyId={null} />);
+    await user.type(screen.getByPlaceholderText(/message your agent/i), "hi{Enter}");
+
+    await waitFor(() => {
+      expect(screen.getByText("Hello")).toBeInTheDocument();
+    });
+    expect(screen.queryByText("greeting")).not.toBeInTheDocument();
+  });
+
+  it("accepts tool trace events without rendering trace payload in messages", async () => {
+    const user = userEvent.setup();
+    mockStreamAgentMessage.mockImplementationOnce(async function* () {
+      yield { event: "conversation", data: { conversation_id: "c1" } };
+      yield {
+        event: "tool_trace",
+        data: {
+          tool_name: "search_inventory_stock",
+          phase: "on_tool_end",
+          args_preview: "{\"query\":\"iphone\"}",
+          duration_ms: 25,
+          status: "ok",
+          output_bytes: 16,
+        },
+      };
+      yield { event: "token", data: { content: "Hello" } };
+      yield { event: "done", data: { conversation_id: "c1" } };
+    });
+
+    renderWithProviders(<ChatWindow agentId="agent-1" companyId="company-1" />);
+    await user.type(screen.getByPlaceholderText(/message your agent/i), "hi{Enter}");
+
+    await waitFor(() => {
+      expect(screen.getByText("Hello")).toBeInTheDocument();
+    });
+    expect(screen.queryByText(/search_inventory_stock/)).not.toBeInTheDocument();
+  });
+
+  it("renders prefilled stock movement form from inventory draft event", async () => {
+    const user = userEvent.setup();
+    mockStreamAgentMessage.mockImplementationOnce(async function* () {
+      yield {
+        event: "inventory_movement_draft",
+        data: {
+          movement_draft: {
+            company_id: "company-1",
+            item_id: "item-42",
+            location_id: "loc-default",
+            movement_type: "receipt",
+            quantity_delta: "250",
+            reason: "restock",
+          },
+        },
+      };
+      yield { event: "done", data: { conversation_id: "c1" } };
+    });
+
+    renderWithProviders(<ChatWindow agentId="agent-1" companyId="company-1" />);
+    await user.type(screen.getByPlaceholderText(/message your agent/i), "add stock{Enter}");
+
+    expect(await screen.findByText(/review stock movement draft/i)).toBeInTheDocument();
+    expect(screen.getByDisplayValue("item-42")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("loc-default")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("250")).toBeInTheDocument();
   });
 
   it("refocuses the message input after a new assistant message is added", async () => {
@@ -621,5 +712,23 @@ describe("ChatWindow", () => {
     expect(await screen.findByText(/unable to save/i)).toBeInTheDocument();
     expect(screen.getByText(/review extracted expense/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /confirm expense/i })).toBeEnabled();
+  });
+
+  it("redirects to login when chat stream returns unauthorized", async () => {
+    const user = userEvent.setup();
+    mockStreamAgentMessage.mockReturnValueOnce({
+      [Symbol.asyncIterator]: () => ({
+        next: async () => {
+          throw new Error("SSE request failed with status 401");
+        },
+      }),
+    });
+
+    renderWithProviders(<ChatWindow agentId="agent-1" companyId="company-1" />);
+    await user.type(screen.getByPlaceholderText(/message your agent/i), "hello{Enter}");
+
+    await waitFor(() => {
+      expect(mockSignOut).toHaveBeenCalledWith({ callbackUrl: "/login" });
+    });
   });
 });

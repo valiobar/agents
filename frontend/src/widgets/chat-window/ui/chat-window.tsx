@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useReducer, useRef } from "react";
-import { useSession } from "next-auth/react";
+import { useEffect, useMemo, useReducer, useRef, useState } from "react";
+import { getSession, signOut, useSession } from "next-auth/react";
 import { useQueryClient } from "@tanstack/react-query";
 
 import { useConversation, useConversations } from "@/entities/conversation/api/queries";
@@ -20,9 +20,13 @@ import { useNotificationStore } from "@/shared/store/notification-store";
 import { Alert } from "@/shared/ui/alert";
 import { Button } from "@/shared/ui/button";
 import { cn } from "@/shared/lib/cn";
+import { routes } from "@/shared/config/routes";
 import { buildExpenseConfirmationMessage } from "@/features/send-message/model/expense-confirmation-message";
 import { receiptUploadSchema, getReceiptUploadErrorMessage, type ExpenseDraftFormValues } from "@/features/send-message/model/receipt-expense-schema";
 import { Spinner } from "@/shared/ui/spinner";
+import type { RecordStockMovementInput } from "@/features/record-stock-movement/model/schema";
+import { StockMovementDraftConfirmation } from "@/features/record-stock-movement/ui/stock-movement-draft-confirmation";
+import type { StockMovement } from "@/entities/inventory/model/types";
 
 import { chatReducer, type ChatState } from "../model/chat-reducer";
 
@@ -61,11 +65,13 @@ export function ChatWindow({
       expenseDraftStatus: "idle",
       expenseDraft: null,
       expenseDraftError: null,
+      toolTraces: [],
     }),
     [],
   );
   const [state, dispatch] = useReducer(chatReducer, initialState);
-
+  const [movementDraft, setMovementDraft] = useState<RecordStockMovementInput | null>(null);
+  const isDevelopment = process.env.NODE_ENV === "development";
   const historyLoadedForConversation = useRef<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const conversationsMenuRef = useRef<HTMLDetailsElement | null>(null);
@@ -142,26 +148,47 @@ export function ChatWindow({
     };
   }, []);
 
+  function isUnauthorizedError(error: unknown) {
+    if (!(error instanceof Error)) return false;
+    return /\b401\b/.test(error.message) || /unauthorized/i.test(error.message);
+  }
+
+  async function resolveActiveToken() {
+    const latestSession = await getSession();
+    if (latestSession?.error === "RefreshAccessTokenError") {
+      void signOut({ callbackUrl: routes.login });
+      return null;
+    }
+    return latestSession?.accessToken ?? token;
+  }
+
   async function sendMessage(message: string) {
-    if (!token) {
+    const activeToken = await resolveActiveToken();
+    if (!activeToken) {
       addNotification("You must be logged in to chat.", "error");
+      void signOut({ callbackUrl: routes.login });
       return;
     }
 
     dispatch({ type: "SEND_MESSAGE", payload: message });
+    setMovementDraft(null);
 
     try {
       for await (const event of streamAgentMessage({
         agentId,
         message,
         conversationId,
-        token,
+        token: activeToken,
       })) {
+        if (event.event === "route") {
+          continue;
+        }
         if (event.event === "conversation") {
           setConversationId(agentId, companyId, event.data.conversation_id);
           historyLoadedForConversation.current = null;
         }
         if (event.event === "token") {
+          console.log("STREAM_TOKEN", event.data.content);
           dispatch({ type: "STREAM_TOKEN", payload: event.data.content });
         }
         if (event.event === "done") {
@@ -173,6 +200,15 @@ export function ChatWindow({
             queryKey: conversationKeys.list(conversationListParams),
           });
         }
+        if (event.event === "inventory_movement_draft") {
+          setMovementDraft(event.data.movement_draft);
+        }
+        if (event.event === "tool_trace") {
+          dispatch({ type: "TOOL_TRACE", payload: event.data });
+          if (isDevelopment) {
+            console.debug("[tool_trace]", event.data);
+          }
+        }
         if (event.event === "error") {
           dispatch({ type: "STREAM_ERROR", payload: event.data.message });
           addNotification(event.data.message, "error");
@@ -183,7 +219,36 @@ export function ChatWindow({
         err instanceof Error ? err.message : "Chat streaming failed.";
       dispatch({ type: "STREAM_ERROR", payload: message });
       addNotification(message, "error");
+      if (isUnauthorizedError(err)) {
+        void signOut({ callbackUrl: routes.login });
+      }
     }
+  }
+
+  function buildMovementRecordedMessage(values: RecordStockMovementInput): string {
+    const reasonText = values.reason?.trim() ? `\nReason: ${values.reason.trim()}` : "";
+    return [
+      "Stock movement recorded:",
+      `- Movement type: ${values.movement_type}`,
+      `- Quantity: ${values.quantity_delta}`,
+      `- Item ID: ${values.item_id}`,
+      `- Location ID: ${values.location_id}`,
+      reasonText,
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  function handleMovementDraftSuccess(_movement: StockMovement, submittedValues: RecordStockMovementInput) {
+    dispatch({
+      type: "APPEND_ASSISTANT_MESSAGE",
+      payload: {
+        content: buildMovementRecordedMessage(submittedValues),
+        metadata: { kind: "inventory_movement_confirmation" },
+      },
+    });
+    setMovementDraft(null);
+    addNotification("Stock movement recorded.", "success");
   }
 
   async function handleReceiptSelected(file: File) {
@@ -349,6 +414,23 @@ export function ChatWindow({
         </div>
       ) : null}
 
+      {isDevelopment && state.toolTraces.length > 0 ? (
+        <details className="mx-4 mt-3 rounded-md border border-dashed border-amber-500/50 bg-amber-500/5 px-3 py-2 text-xs text-amber-900 dark:text-amber-200">
+          <summary className="cursor-pointer font-medium">
+            Tool traces ({state.toolTraces.length})
+          </summary>
+          <div className="mt-2 max-h-40 space-y-1 overflow-y-auto font-mono">
+            {state.toolTraces.map((trace, index) => (
+              <p key={`${trace.tool_name}:${trace.phase}:${index}`}>
+                {trace.tool_name} | {trace.phase} | status={trace.status} | duration=
+                {trace.duration_ms ?? "n/a"}ms | output={trace.output_bytes}B | args=
+                {trace.args_preview}
+              </p>
+            ))}
+          </div>
+        </details>
+      ) : null}
+
       <div className={cn("flex-1 overflow-y-auto p-4", state.status === "streaming" ? "opacity-100" : "")}>
         <MessageList
           messages={state.messages}
@@ -382,6 +464,15 @@ export function ChatWindow({
             confirmed={isExpenseConfirmed}
             onCancel={() => dispatch({ type: "EXPENSE_DRAFT_CLEAR" })}
             onConfirm={handleDraftConfirm}
+          />
+        ) : null}
+        {movementDraft ? (
+          <StockMovementDraftConfirmation
+            token={token}
+            draft={movementDraft}
+            disabled={state.status === "streaming"}
+            onCancel={() => setMovementDraft(null)}
+            onSuccess={handleMovementDraftSuccess}
           />
         ) : null}
         <div ref={bottomRef} />

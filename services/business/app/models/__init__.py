@@ -1,5 +1,5 @@
-from app.models.company import CompanyCreate, CompanyInDB, CompanyResponse, CompanyUpdate
-from app.models.financial import (
+from app.company.models import CompanyCreate, CompanyInDB, CompanyResponse, CompanyUpdate
+from app.financial.models import (
     CurrencyCode,
     ExpenseCategory,
     ExpenseCreate,
@@ -24,7 +24,7 @@ from app.models.financial import (
     MoneyModel,
     SummaryGroupBy,
 )
-from app.models.partner import PartnerCreate, PartnerInDB, PartnerKind, PartnerResponse, PartnerUpdate
+from app.partner.models import PartnerCreate, PartnerInDB, PartnerKind, PartnerResponse, PartnerUpdate
 
 __all__ = [
     "CompanyCreate",

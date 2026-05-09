@@ -38,6 +38,8 @@ class Settings(BaseSettings):
 
     tax_docs_path: str = "data/knowledgebase/tax"
     preload_tax_docs: bool = False
+    inventory_docs_path: str = "data/knowledgebase/inventory"
+    preload_inventory_docs: bool = True
 
     model_config = SettingsConfigDict(env_file=".env")
 

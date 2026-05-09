@@ -2,7 +2,7 @@ import { z } from "zod";
 
 const decimalString = (opts?: { maxDecimals?: number }) => {
   const maxDecimals = opts?.maxDecimals ?? 4;
-  const re = new RegExp(`^\\d+(?:\\.\\d{1,${maxDecimals}})?$`);
+  const re = new RegExp(String.raw`^\d+(?:\.\d{1,${maxDecimals}})?$`);
   return z.string().regex(re, "Invalid number format");
 };
 
@@ -36,6 +36,9 @@ export const invoiceItemInputSchema = z.object({
   unit_price: decimalString({ maxDecimals: 4 }),
   vat_rate: vatRateString.default("0.20"),
   category: nullableText(120, "Category is too long"),
+  inventory_item_id: z.preprocess(emptyStringToNull, z.string().max(64).nullable().optional()),
+  inventory_location_id: z.preprocess(emptyStringToNull, z.string().max(64).nullable().optional()),
+  stock_quantity: z.preprocess(emptyStringToNull, decimalString({ maxDecimals: 4 }).nullable().optional()),
 });
 
 export const createInvoiceSchema = z
@@ -57,7 +60,7 @@ export const createInvoiceSchema = z
     original_label: z.string().min(1).max(64).default("ОРИГИНАЛ"),
     currency: z.enum(["BGN", "EUR", "USD"]).default("EUR"),
     items: z.array(invoiceItemInputSchema).min(1),
-    status: z.enum(["draft", "sent", "paid", "overdue", "cancelled"]).default("draft"),
+    status: z.enum(["draft", "sent", "paid", "overdue", "cancelled"]).default("sent"),
     notes: nullableText(2000, "Notes are too long"),
   })
   .refine((value) => value.partner_id || value.recipient, {

@@ -2,7 +2,7 @@
 
 ## Current State
 
-The Agent Service owns user-created agents, MongoDB-backed conversation persistence, Accountant Agent runtime, multi-provider LLM factory, RAG search, calculator/date tooling, Business-backed financial and partner LangChain tools, and SSE chat streaming through the API Gateway.
+The Agent Service owns user-created agents, MongoDB-backed conversation persistence, Accountant, Inventory, and Router runtimes, multi-provider LLM factory, RAG search, calculator/date tooling, Business-backed financial, partner, and inventory LangChain tools, and SSE chat streaming through the API Gateway.
 
 ## Responsibility
 
@@ -10,7 +10,7 @@ The Agent Service owns user-created agents and persisted chat history. It receiv
 
 ### Business Split Baseline
 
-The Business Service split is active. Public `/companies`, `/partners`, `/invoices`, and `/expenses` URLs still exist at the gateway, but the gateway routes those prefixes to Business Service. Agent exposes only agent lifecycle, chat, conversation history, and health endpoints.
+The Business Service split is active. Public `/companies`, `/partners`, `/invoices`, `/expenses`, and `/inventory/*` URLs exist at the gateway, but the gateway routes those prefixes to Business Service. Agent exposes only agent lifecycle, chat, conversation history, agent receipt-draft helper endpoints, and health endpoints.
 
 Runtime guardrails:
 
@@ -23,6 +23,8 @@ Implemented responsibilities:
 
 - Agent lifecycle operations: create, list, get, update, and delete.
 - Accountant Agent runtime using the Strategy pattern.
+- Inventory Agent runtime for stock, item, movement, location, and import-preview workflows.
+- Router Agent runtime for turn classification and accountant/inventory/general delegation.
 - Provider selection for OpenAI, Anthropic, DeepSeek, and Ollama through a Factory pattern.
 - Chat request orchestration and `text/event-stream` SSE output.
 - Conversation creation and history persistence in MongoDB.
@@ -58,7 +60,9 @@ models/
   companybook.py         # CompanyBook response and mapping schemas
 runtime/
   base_agent.py          # Strategy interface and streaming loop
-  accountant.py          # Phase 3 concrete agent
+  accountant.py          # Finance concrete agent
+  inventory.py           # Inventory concrete agent
+  router.py              # LangGraph classifier/delegation runtime
   registry.py            # agent_type -> runtime class
   tool_context.py        # Business and CompanyBook clients injected into tools
   providers/
@@ -80,7 +84,7 @@ All client calls go through the API Gateway at `http://localhost:8000`. Internal
 | Route | Status | Purpose |
 |-------|--------|---------|
 | `GET /health` | Implemented | Internal health check |
-| `POST /agents` | Implemented | Create an Accountant Agent, optionally assigned to a company |
+| `POST /agents` | Implemented | Create an Accountant, Inventory, or Router agent, optionally assigned to a company |
 | `GET /agents?company_id=...&limit=50&offset=0` | Implemented | List current user's agents, optionally filtered by company |
 | `GET /agents/{agent_id}` | Implemented | Get one current-user agent |
 | `PATCH /agents/{agent_id}` | Implemented | Update name, description, or config |
@@ -163,6 +167,7 @@ Set `AGENT_ENV=development` for the Agent Service to log LangChain tool start, e
 | `conversation` | `{ "conversation_id": "..." }` | A new conversation is created because `conversation_id` was omitted. |
 | `start` | `{ "conversation_id": "..." }` | Runtime initialization succeeded and token streaming is starting. |
 | `token` | `{ "content": "..." }` | A streamed assistant token or chunk is available. |
+| `route` | `{ "predicted_route": "inventory", "executed_route": "inventory", "reason": "...", "confidence": 0.95, "company_id": "...", "company_scope": "assigned" }` | Router-only metadata emitted after persistence and before `done`. |
 | `error` | `{ "message": "..." }` | Agent lookup, conversation lookup, provider setup, runtime execution, or message persistence failed. |
 | `done` | `{ "conversation_id": "..." }` | Runtime completed and user/assistant messages were persisted. |
 
@@ -178,9 +183,14 @@ data: {"conversation_id":"665f1f77c9e0f7a8093bb711"}
 event: token
 data: {"content":"20% VAT on 100 is "}
 
+event: route
+data: {"predicted_route":"accountant","executed_route":"accountant","reason":"VAT question","confidence":0.94,"company_id":"665f1f77c9e0f7a8093bb701","company_scope":"assigned"}
+
 event: done
 data: {"conversation_id":"665f1f77c9e0f7a8093bb711"}
 ```
+
+Non-router chats do not emit `route`. Clients should tolerate optional metadata events and continue using `token` and `done` as the user-visible completion contract.
 
 ## Configuration
 
@@ -258,6 +268,17 @@ curl -X POST http://localhost:8000/agents \
   -d '{"name":"My Accountant","agent_type":"accountant","company_id":"'"$COMPANY_ID"'","config":{"provider":"openai","temperature":0.2}}'
 ```
 
+Create a router agent for the same company:
+
+```bash
+curl -X POST http://localhost:8000/agents \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Ops Router","agent_type":"router","company_id":"'"$COMPANY_ID"'","config":{"provider":"openai","temperature":0.1}}'
+```
+
+Router delegation currently uses linked delegate documents when they exist (`parent_agent_id` and `delegate_role`) and otherwise falls back to the latest same-user, same-company accountant or inventory agent. The public create-agent endpoint does not yet auto-provision hidden delegates or hide delegate documents from list responses.
+
 Stream chat:
 
 ```bash
@@ -269,6 +290,8 @@ curl -N -X POST "http://localhost:8000/agents/$AGENT_ID/chat" \
 ```
 
 For a new chat, provider and runtime setup happens before the conversation is created. During the turn, `BaseAgent` runs a LangChain `AgentExecutor`; the executor calls RAG, calculator/date, Business-backed financial/partner, or CompanyBook tools when the model requests them, feeds tool results back to the model, and streams only final user-facing chunks as `token` events.
+
+For router chats, setup also resolves compatible accountant and inventory child runtimes before conversation creation. A successful router turn may include an optional `route` SSE event before `done`; the metadata is not persisted in conversation messages.
 
 Load conversation history:
 
@@ -330,6 +353,7 @@ curl -X POST http://localhost:8000/expenses \
 | Ollama runtime errors | Local Ollama is not running or model is missing | Start Ollama and pull `OLLAMA_CHAT_MODEL`. |
 | RAG tool reports retrieval failure | Knowledge Base Service, ChromaDB, or embedding provider is unavailable | Start `knowledge` and `chromadb`; verify `/retrieve`. |
 | Partner or invoice tool says the agent needs a company | The agent has `company_id = null` | Assign the agent to a company before using partner or financial write tools. |
+| Router returns general help for a finance or stock prompt | No compatible child runtime exists, or the child company scope mismatched the router | Create same-scope accountant/inventory agents or seed linked delegates; verify `company_id` matches. |
 | Agent create/update returns `404 Company not found` | Business reported the `company_id` does not exist for this user | Use the owning user's token and an owned company id. |
 | Financial or partner tool reports Business unavailable | Business Service is down or unreachable from Agent | Start `business` and verify `BUSINESS_SERVICE_URL`. |
 | Chat creates a conversation but no `done` event | Runtime execution or message persistence failed after conversation creation | Inspect the SSE `error` event and service logs. Provider setup failures happen before new conversation creation. |

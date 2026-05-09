@@ -5,7 +5,7 @@ from fastapi import HTTPException, UploadFile, status
 from app.clients.business import BusinessClient, BusinessClientError
 from app.clients.knowledge import KnowledgeClient, KnowledgeClientError
 from app.models.financial import ExpenseCreate
-from app.models.receipt import ConfirmExtractedExpenseRequest, ConfirmExtractedExpenseResponse, ExpenseDraftResponse
+from app.models.financial.receipt import ConfirmExtractedExpenseRequest, ConfirmExtractedExpenseResponse, ExpenseDraftResponse
 from app.repositories.agent_repo import AgentRepository
 
 

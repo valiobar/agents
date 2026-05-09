@@ -6,7 +6,7 @@ from fastapi import HTTPException, status
 
 from app.clients.business import BusinessClient, BusinessClientError
 from app.config import Settings, settings
-from app.models.agent import AgentConfig, AgentCreate, AgentInDB, AgentUpdate, ProviderName
+from app.models.shared.agent import AgentConfig, AgentCreate, AgentInDB, AgentUpdate, ProviderName
 from app.repositories.agent_repo import AgentRepository
 
 _AGENT_NOT_FOUND_DETAIL = "Agent not found"

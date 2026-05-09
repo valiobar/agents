@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Literal
 
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import ReturnDocument
 
-from app.models.agent import AgentCreate, AgentInDB, AgentUpdate
+from app.models.shared.agent import AgentCreate, AgentInDB, AgentType, AgentUpdate
 
 
 class AgentRepository:
@@ -83,3 +84,34 @@ class AgentRepository:
     async def count_by_company(self, user_id: str, company_id: str) -> int:
         # `company_id` is introduced later in the plan; this query becomes effective once present.
         return int(await self.collection.count_documents({"user_id": user_id, "company_id": company_id}))
+
+    async def get_latest_by_type(
+        self,
+        user_id: str,
+        agent_type: AgentType,
+        company_id: str | None,
+    ) -> AgentInDB | None:
+        query: dict[str, object] = {
+            "user_id": user_id,
+            "agent_type": agent_type,
+            "company_id": company_id,
+        }
+        doc = await self.collection.find_one(query, sort=[("created_at", -1)])
+        return self._to_model(doc) if doc else None
+
+    async def get_delegate_for_router(
+        self,
+        user_id: str,
+        parent_agent_id: str,
+        delegate_role: Literal["accountant", "inventory"],
+    ) -> AgentInDB | None:
+        """Return a linked hidden delegate runtime for a router, if present."""
+        doc = await self.collection.find_one(
+            {
+                "user_id": user_id,
+                "parent_agent_id": parent_agent_id,
+                "delegate_role": delegate_role,
+            },
+            sort=[("created_at", -1)],
+        )
+        return self._to_model(doc) if doc else None

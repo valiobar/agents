@@ -80,8 +80,9 @@ sequenceDiagram
     participant Client
     participant Gateway
     participant Agent
-    participant Runtime as BaseAgent
+    participant Runtime as BaseAgent/RouterAgent
     participant Executor as AgentExecutor
+    participant Graph as Router Graph
     participant KB as Knowledge Base
     participant Business
     participant LLM
@@ -92,6 +93,10 @@ sequenceDiagram
     Gateway->>Agent: forward with x-user-id
     Agent->>Mongo: load agent
     Agent->>Agent: create provider and runtime
+    opt router runtime
+        Agent->>Mongo: resolve linked or same-scope accountant/inventory children
+        Agent->>Agent: reject child if company_id differs from router
+    end
     alt no conversation_id
         Agent->>Mongo: create conversation
         Agent-->>Gateway: event: conversation
@@ -101,22 +106,33 @@ sequenceDiagram
     end
     Agent-->>Gateway: event: start
     Agent->>Runtime: run(message, recent history)
-    Runtime->>Runtime: prepare_run_input() and prepare_tools()
-    Runtime->>Executor: prompt + history + available tools
-    Executor->>LLM: prompt + history + available tools
-    LLM-->>Executor: tool calls or final chunks
-    opt model invokes rag_search
-        Executor->>KB: POST /retrieve with x-user-id and company_id
-        KB-->>Executor: relevant chunks
+    alt accountant or inventory runtime
+        Runtime->>Runtime: prepare_run_input() and prepare_tools()
+        Runtime->>Executor: prompt + history + available tools
+        Executor->>LLM: prompt + history + available tools
+        LLM-->>Executor: tool calls or final chunks
+        opt model invokes rag_search
+            Executor->>KB: POST /retrieve with x-user-id and company_id
+            KB-->>Executor: relevant chunks
+        end
+        opt model invokes business-domain tool
+            Executor->>Business: HTTP request through BusinessClient + x-user-id
+            Business-->>Executor: validated domain response
+        end
+        Executor->>LLM: tool results for final response
+        LLM-->>Executor: streamed final chunks
+        Executor-->>Runtime: LangChain stream events
+        Runtime->>Runtime: on_event(), on_chunk(), collect usage metadata
+    else router runtime
+        Runtime->>Graph: classify route and select branch
+        Graph->>LLM: structured route decision
+        opt specialist branch
+            Graph->>Runtime: run configured child runtime
+        end
+        opt general branch
+            Graph->>LLM: no-tool general fallback
+        end
     end
-    opt model invokes company/partner/financial tool
-        Executor->>Business: HTTP request through BusinessClient + x-user-id
-        Business-->>Executor: validated domain response
-    end
-    Executor->>LLM: tool results for final response
-    LLM-->>Executor: streamed final chunks
-    Executor-->>Runtime: LangChain stream events
-    Runtime->>Runtime: on_event(), on_chunk(), collect usage metadata
     Runtime-->>Agent: token chunks
     Agent-->>Gateway: event: token
     Gateway-->>Client: event: token
@@ -124,6 +140,10 @@ sequenceDiagram
     Agent->>Mongo: persist messages
     alt persistence succeeded
         Agent->>Mongo: insert usage_events
+        opt router route metadata
+            Agent-->>Gateway: event: route
+            Gateway-->>Client: event: route
+        end
         Agent-->>Gateway: event: done
         Gateway-->>Client: event: done
     else provider/runtime/persistence failed
@@ -132,7 +152,7 @@ sequenceDiagram
     end
 ```
 
-Provider and runtime setup happens before new conversation creation, so setup errors emit `error` without inserting an empty conversation. `done` is emitted only after the user and assistant messages are persisted. Raw provider usage events are inserted after message persistence; usage insert failures are logged but do not replace a successful chat with an SSE `error`.
+Provider and runtime setup happens before new conversation creation, so setup errors emit `error` without inserting an empty conversation. Router child runtime resolution also happens before conversation creation. `done` is emitted only after the user and assistant messages are persisted. Raw provider usage events are inserted after message persistence; usage insert failures are logged but do not replace a successful chat with an SSE `error`.
 
 Runtime hooks are internal to `BaseAgent`. They may transform inputs, tools, normalized LangChain events, streamed chunks, final fallback output, and run metadata before the Agent Service emits SSE or writes MongoDB. Hooks must not emit SSE or persist data directly.
 
@@ -143,10 +163,11 @@ Runtime hooks are internal to `BaseAgent`. They may transform inputs, tools, nor
 | `conversation` | `{ "conversation_id": "..." }` | Only emitted for a new conversation. |
 | `start` | `{ "conversation_id": "..." }` | Runtime is ready and streaming begins. |
 | `token` | `{ "content": "..." }` | One streamed assistant chunk. |
+| `route` | `{ "predicted_route": "inventory", "executed_route": "inventory", "reason": "...", "confidence": 0.95, "company_id": "...", "company_scope": "assigned" }` | Optional router metadata emitted after persistence and before `done`. |
 | `error` | `{ "message": "..." }` | Terminal error for lookup, provider setup, runtime execution, or message persistence. |
 | `done` | `{ "conversation_id": "..." }` | Messages were persisted after successful runtime completion. |
 
-The public SSE event names and payloads do not include usage data. Usage is stored internally in `usage_events` for future billing or analytics.
+The public SSE event names and payloads do not include usage data. Usage is stored internally in `usage_events` for future billing or analytics. Route metadata is diagnostic and non-persisted; clients should ignore it if they do not display routing information.
 
 ## Runtime Usage Flow
 
@@ -168,7 +189,7 @@ sequenceDiagram
     UsageRepo->>Mongo: insert usage_events with idempotency_key
 ```
 
-The usage ledger records raw provider/model facts only: user, agent, conversation, provider, model, optional run id, LLM call index, input/output/total token counts when reported, stream chunk/character counts, timing, and `source="agent_runtime"`. It does not estimate missing tokens and does not compute billing cost.
+The usage ledger records raw provider/model facts only: user, agent, conversation, provider, model, optional run id, LLM call index, input/output/total token counts when reported, stream chunk/character counts, timing, and `source="agent_runtime"`. It does not estimate missing tokens and does not compute billing cost. Router classifier/general calls are attributed to the router agent id; delegated child calls keep the accountant or inventory runtime agent id.
 
 ## RAG Tool Flow
 

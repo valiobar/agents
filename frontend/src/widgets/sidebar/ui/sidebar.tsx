@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Bot, Building2, Handshake, LayoutDashboard, Receipt, Wallet, X } from "lucide-react";
+import { Bot, Building2, Handshake, LayoutDashboard, Package, Receipt, Wallet, X } from "lucide-react";
 
 import { routes } from "@/shared/config/routes";
 import { cn } from "@/shared/lib/cn";
@@ -17,6 +17,7 @@ const navItems = [
   { href: routes.agents, label: "Agents", icon: Bot },
   { href: routes.invoices, label: "Invoices", icon: Receipt },
   { href: routes.expenses, label: "Expenses", icon: Wallet },
+  { href: routes.inventory, label: "Inventory", icon: Package },
 ] as const;
 
 export function Sidebar() {

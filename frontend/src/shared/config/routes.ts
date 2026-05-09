@@ -9,5 +9,6 @@ export const routes = {
   agentDetail: (id: string) => `/dashboard/agents/${id}`,
   invoices: "/dashboard/invoices",
   expenses: "/dashboard/expenses",
+  inventory: "/dashboard/inventory",
 } as const;
 

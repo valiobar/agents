@@ -1,4 +1,4 @@
-from app.models.agent import ProviderName
+from app.models.shared.agent import ProviderName
 from app.runtime.providers.anthropic import AnthropicProvider
 from app.runtime.providers.base import BaseLLMProvider
 from app.runtime.providers.deepseek import DeepSeekProvider

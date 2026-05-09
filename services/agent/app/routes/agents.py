@@ -4,9 +4,9 @@ from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile,
 from starlette.responses import StreamingResponse
 
 from app.dependencies import get_agent_service, get_chat_service, get_receipt_service, get_user_id
-from app.models.agent import AgentCreate, AgentResponse, AgentUpdate
-from app.models.chat import ChatRequest
-from app.models.receipt import (
+from app.models.shared.agent import AgentCreate, AgentResponse, AgentUpdate
+from app.models.shared.chat import ChatRequest
+from app.models.financial.receipt import (
     ConfirmExtractedExpenseRequest,
     ConfirmExtractedExpenseResponse,
     ExpenseDraftRequestSourceDocumentType,

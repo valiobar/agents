@@ -6,7 +6,7 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo.errors import BulkWriteError
 
-from app.models.usage import UsageEventCreate, UsageEventInDB
+from app.models.shared.usage import UsageEventCreate, UsageEventInDB
 
 
 class UsageRepository:

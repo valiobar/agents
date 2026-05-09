@@ -11,8 +11,8 @@ from fastapi import HTTPException
 
 from app.clients.business import BusinessClient, BusinessClientError
 from app.models.financial import ExpenseResponse
-from app.models.partner import PartnerResponse
-from app.models.receipt import (
+from app.models.financial.partner import PartnerResponse
+from app.models.financial.receipt import (
     ConfirmExtractedExpenseRequest,
     ExtractedPartnerDraft,
     PartnerUpsertResult,

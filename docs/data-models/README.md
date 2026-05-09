@@ -12,12 +12,13 @@ This folder documents the data models that currently exist in code and the Mongo
 | Agent models | Implemented | `services/agent/app/models/agent.py`, `services/agent/app/repositories/agent_repo.py` | `agent.md` |
 | Agent conversation models | Implemented | `services/agent/app/models/conversation.py`, `services/agent/app/repositories/conversation_repo.py` | `agent.md` |
 | Agent chat request/SSE models | Implemented | `services/agent/app/models/chat.py`, `services/agent/app/services/chat_service.py` | `agent.md` |
-| Business company models | Implemented | `services/business/app/models/company.py`, `services/business/app/repositories/company_repo.py` | `business.md` |
-| Business partner models | Implemented | `services/business/app/models/partner.py`, `services/business/app/repositories/partner_repo.py` | `business.md` |
-| Business invoice models | Implemented | `services/business/app/models/financial.py`, `services/business/app/repositories/invoice_repo.py` | `business.md` |
-| Business expense models | Implemented | `services/business/app/models/financial.py`, `services/business/app/repositories/expense_repo.py` | `business.md` |
-| Business invoice counters | Implemented | `services/business/app/repositories/invoice_repo.py` | `business.md` |
-| Business financial summary models | Implemented | `services/business/app/models/financial.py`, `services/business/app/services/financial_summary_service.py` | `business.md` |
+| Agent inventory tool/client models | Implemented | `services/agent/app/models/inventory.py` | `agent.md` |
+| Business company models | Implemented | `services/business/app/company/models.py`, `services/business/app/company/repositories/company_repo.py` | `business.md` |
+| Business partner models | Implemented | `services/business/app/partner/models.py`, `services/business/app/partner/repositories/partner_repo.py` | `business.md` |
+| Business invoice models | Implemented | `services/business/app/financial/models.py`, `services/business/app/financial/repositories/invoice_repo.py` | `business.md` |
+| Business expense models | Implemented | `services/business/app/financial/models.py`, `services/business/app/financial/repositories/expense_repo.py` | `business.md` |
+| Business invoice counters | Implemented | `services/business/app/financial/repositories/invoice_repo.py` | `business.md` |
+| Business financial summary models | Implemented | `services/business/app/financial/models.py`, `services/business/app/financial/services/financial_summary_service.py` | `business.md` |
 | Knowledge Base document models | Implemented | `services/knowledge/app/models/document.py`, `services/knowledge/app/repositories/document_repo.py` | `knowledge.md` |
 | Knowledge Base retrieval models | Implemented | `services/knowledge/app/models/retrieval.py`, `services/knowledge/app/adapters/chroma.py` | `knowledge.md` |
 | Orchestrator models | Not implemented yet | Stub service only | Add when code exists |

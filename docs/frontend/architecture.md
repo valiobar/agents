@@ -14,7 +14,7 @@ The frontend uses **Feature-Sliced Design** -- a layered architecture that organ
 
 ### Why FSD
 
-The platform has multiple distinct domains (companies, partners, agents, chat, invoices, expenses, knowledge base, auth) that each involve data models, API calls, forms, and display components. A flat `components/` folder would quickly become unmanageable. FSD enforces domain boundaries and prevents cross-domain coupling.
+The platform has multiple distinct domains (companies, partners, agents, chat, invoices, expenses, inventory, knowledge base, auth) that each involve data models, API calls, forms, and display components. A flat `components/` folder would quickly become unmanageable. FSD enforces domain boundaries and prevents cross-domain coupling.
 
 | Alternative | Why Not |
 |---|---|
@@ -99,8 +99,10 @@ frontend/src/
 │   │   │       └── page.tsx          # Chat with agent
 │   │   ├── invoices/
 │   │   │   └── page.tsx              # Invoice list + create form
-│   │   └── expenses/
-│   │       └── page.tsx              # Expense list + record form
+│   │   ├── expenses/
+│   │   │   └── page.tsx              # Expense list + record form
+│   │   └── inventory/
+│   │       └── page.tsx              # Inventory list + stock controls + import review
 │   └── api/
 │       └── auth/
 │           └── [...nextauth]/route.ts
@@ -119,6 +121,12 @@ frontend/src/
 │   │   └── ui/                       # Partner table with company/kind filters
 │   ├── expense-table/
 │   │   └── ui/                       # ExpenseTable with sorting/filters
+│   ├── inventory-table/
+│   │   └── ui/                       # Inventory item table with stock level badges and filters
+│   ├── low-stock-panel/
+│   │   └── ui/                       # Low stock alerts grouped by item/location
+│   ├── import-preview-table/
+│   │   └── ui/                       # Import preview review table with confirm/cancel actions
 │   └── sidebar/
 │       └── ui/                       # Navigation sidebar
 │
@@ -144,6 +152,17 @@ frontend/src/
 │   │   ├── ui/                       # InvoiceForm (dynamic line items, VAT calc)
 │   │   ├── model/                    # Invoice creation logic, Zod schema
 │   │   └── api/                      # POST /invoices
+│   ├── create-inventory-item/
+│   │   ├── ui/                       # CreateInventoryItemForm + dialog wrapper
+│   │   ├── model/                    # Zod schema for inventory item create/update
+│   │   └── api/                      # POST /inventory/items, PATCH /inventory/items/:id
+│   ├── record-stock-movement/
+│   │   ├── ui/                       # RecordStockMovementForm + dialog wrapper
+│   │   ├── model/                    # Movement validation schema
+│   │   └── api/                      # POST /inventory/movements
+│   ├── inventory-import-review/
+│   │   ├── ui/                       # ImportPreviewActions (confirm/cancel)
+│   │   └── api/                      # POST /inventory/import-previews/:id/confirm|cancel
 │   ├── download-invoice-pdf/
 │   │   ├── ui/                       # PDF download button
 │   │   └── model/                    # React PDF invoice document
@@ -191,6 +210,10 @@ frontend/src/
 │   │   ├── ui/                       # ExpenseRow, CategoryBadge
 │   │   ├── model/                    # Expense types, query keys
 │   │   └── api/                      # GET /expenses
+│   ├── inventory/
+│   │   ├── ui/                       # InventoryItemRow, StockLevelBadge, MovementTypeBadge
+│   │   ├── model/                    # Inventory types, query keys
+│   │   └── api/                      # GET /inventory/items, /levels, /movements, /search, /import-previews
 │   ├── conversation/
 │   │   ├── ui/                       # MessageBubble, MessageList
 │   │   ├── model/                    # Conversation types, query keys
@@ -218,6 +241,7 @@ frontend/src/
 │   ├── store/
 │   │   ├── ui-store.ts               # Sidebar, theme (persisted)
 │   │   ├── invoice-filters-store.ts  # Table filter state
+│   │   ├── inventory-filters-store.ts # Inventory table filter state
 │   │   ├── chat-store.ts             # Cross-feature: active agent, chat status
 │   │   └── notification-store.ts     # Cross-feature: toast/notification queue
 │   └── config/
@@ -250,8 +274,8 @@ graph LR
         AgentSvcCompanies[Agent Service -- Companies/Partners]
         AgentSvcCRUD[Agent Service -- Agent CRUD]
         AgentSvcChat[Agent Service -- Chat]
-        AgentSvcInv[Agent Service -- Invoices]
-        AgentSvcExp[Agent Service -- Expenses]
+        BusinessSvcFin[Business Service -- Invoices/Expenses]
+        BusinessSvcInv[Business Service -- Inventory]
         KBSvc[Knowledge Base Service]
     end
 
@@ -274,6 +298,13 @@ graph LR
         EntExpense["entities/expense"]
         FeatRecordExp["features/record-expense"]
         WidgetExpTable["widgets/expense-table"]
+        EntInventory["entities/inventory"]
+        FeatCreateInventory["features/create-inventory-item"]
+        FeatRecordMovement["features/record-stock-movement"]
+        FeatImportReview["features/inventory-import-review"]
+        WidgetInventoryTable["widgets/inventory-table"]
+        WidgetLowStock["widgets/low-stock-panel"]
+        WidgetImportPreview["widgets/import-preview-table"]
         FeatUploadDoc["features/upload-document"]
     end
 
@@ -288,13 +319,20 @@ graph LR
     AgentSvcChat --> EntConv
     AgentSvcChat --> FeatSendMsg
     AgentSvcChat --> WidgetChat
-    AgentSvcInv --> EntInvoice
-    AgentSvcInv --> FeatCreateInv
-    AgentSvcInv --> FeatDownloadInvPdf
-    AgentSvcInv --> WidgetInvTable
-    AgentSvcExp --> EntExpense
-    AgentSvcExp --> FeatRecordExp
-    AgentSvcExp --> WidgetExpTable
+    BusinessSvcFin --> EntInvoice
+    BusinessSvcFin --> FeatCreateInv
+    BusinessSvcFin --> FeatDownloadInvPdf
+    BusinessSvcFin --> WidgetInvTable
+    BusinessSvcFin --> EntExpense
+    BusinessSvcFin --> FeatRecordExp
+    BusinessSvcFin --> WidgetExpTable
+    BusinessSvcInv --> EntInventory
+    BusinessSvcInv --> FeatCreateInventory
+    BusinessSvcInv --> FeatRecordMovement
+    BusinessSvcInv --> FeatImportReview
+    BusinessSvcInv --> WidgetInventoryTable
+    BusinessSvcInv --> WidgetLowStock
+    BusinessSvcInv --> WidgetImportPreview
     KBSvc --> FeatUploadDoc
 ```
 
@@ -304,8 +342,8 @@ graph LR
 | Agent Service (Companies/Partners) | `entities/company` + `entities/partner` + `features/create-company` + `features/update-company` + `features/create-partner` + `features/update-partner` + `widgets/company-table` + `widgets/partner-table` |
 | Agent Service (CRUD) | `entities/agent` + `features/create-agent` + `features/update-agent` |
 | Agent Service (Chat) | `entities/conversation` + `features/send-message` + `widgets/chat-window` |
-| Agent Service (Invoices) | `entities/invoice` + `features/create-invoice` + `features/download-invoice-pdf` + `widgets/invoice-table` |
-| Agent Service (Expenses) | `entities/expense` + `features/record-expense` + `widgets/expense-table` |
+| Business Service (Invoices/Expenses) | `entities/invoice` + `features/create-invoice` + `features/download-invoice-pdf` + `widgets/invoice-table` + `entities/expense` + `features/record-expense` + `widgets/expense-table` |
+| Business Service (Inventory) | `entities/inventory` + `features/create-inventory-item` + `features/record-stock-movement` + `features/inventory-import-review` + `widgets/inventory-table` + `widgets/low-stock-panel` + `widgets/import-preview-table` |
 | Knowledge Base Service | `features/upload-document` using selected `company_id` |
 | API Gateway | `shared/api/client.ts` (single entry point for all HTTP calls) |
 
@@ -457,7 +495,7 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
 When streaming completes, the finalized message is also written to the TanStack Query cache (conversation history) so it persists across navigations without a refetch. Chat history is scoped by the agent's selected company: `widgets/chat-window` opens in a fresh state (no implicit latest-history restore), fetches scoped conversation summaries for the history menu via `GET /conversations?agent_id=...&company_id=...&limit=20`, and loads full history only when the user explicitly selects a conversation. `shared/store/chat-store.ts` keeps the currently opened conversation id by `agentId:companyId`.
 
-The generic SSE parser in `shared/api/sse.ts` uses `fetch()` with `Accept: text/event-stream`, which allows authenticated POST streams to `POST /agents/{id}/chat`. The chat widget dispatches actions as events arrive.
+The generic SSE parser in `shared/api/sse.ts` uses `fetch()` with `Accept: text/event-stream`, which allows authenticated POST streams to `POST /agents/{id}/chat`. The parser accepts `conversation`, `start`, `token`, `route`, `done`, and `error` events and skips unknown event names. The chat widget dispatches visible actions for token/error/done events and tolerates router `route` metadata without adding a visible message.
 
 ### 3. Form State -- React Hook Form + Zod
 
@@ -841,6 +879,10 @@ sequenceDiagram
         SendMsg-->>ChatWindow: dispatch STREAM_TOKEN
         ChatWindow-->>User: render token
     end
+    opt router metadata
+        ApiClient-->>SendMsg: yield route metadata
+        SendMsg-->>ChatWindow: ignore for visible chat content
+    end
     SendMsg-->>ChatWindow: dispatch STREAM_COMPLETE
     ChatWindow->>ChatWindow: sync to TanStack Query cache
 ```
@@ -973,8 +1015,15 @@ lucide-react                → icons
 
 ### Phase 2
 
-- New agent types appear in `create-agent` form (type picker expands)
-- No frontend structural changes needed -- backend Strategy pattern means agent types are a data-driven list, not hardcoded UI
+- Added inventory management UI slices:
+  - `entities/inventory` query hooks/types/badges for item, stock level, movement, search, and import preview reads
+  - `features/create-inventory-item`, `features/record-stock-movement`, and `features/inventory-import-review` for inventory writes and review actions
+  - `widgets/inventory-table`, `widgets/low-stock-panel`, and `widgets/import-preview-table`
+  - `app/dashboard/inventory/page.tsx` and sidebar navigation route for inventory operations
+- Added optional inventory linking fields to invoice line items in `features/create-invoice` so invoice lines can reference item/location context.
+- Invoice line-item inventory linking now uses debounced server-side `POST /inventory/search` (minimum 2 characters, stock-aware results) instead of preloading full inventory item lists, which keeps invoice create UX responsive for large catalogs.
+- Router is available in `features/create-agent` as a selectable agent type. Selecting Router from the untouched default lowers temperature to `0.1`, and the company helper text explains that router delegation is limited to compatible company scope.
+- Chat SSE handling accepts optional router `route` metadata and keeps it out of the visible message reducer.
 
 ### Phase 3
 

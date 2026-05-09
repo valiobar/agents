@@ -1,4 +1,4 @@
-export type AgentType = "accountant";
+export type AgentType = "accountant" | "inventory" | "router";
 export type LLMProvider = "openai" | "anthropic" | "deepseek" | "ollama";
 
 export interface AgentConfig {

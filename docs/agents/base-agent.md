@@ -4,12 +4,14 @@
 
 `BaseAgent` is the shared strategy contract for all chat-capable agents in the Agent Service. It defines how a persisted agent configuration, selected LLM provider, user scope, tool context, prompt, tools, and conversation history are assembled into a LangChain `AgentExecutor` run.
 
-Concrete agents, such as `AccountantAgent`, provide only:
+Concrete tool agents, such as `AccountantAgent` and `InventoryAgent`, provide only:
 
 - The system prompt through `get_system_prompt()`.
 - The allowed LangChain tools through `get_tools()`.
 
 The base runtime owns the common execution loop, chat history conversion, streaming extraction, final-output fallback, and development-only observability.
+
+`RouterAgent` is the exception to the normal `AgentExecutor` path. It is still a `BaseAgent` subclass and is created through the same registry, but it overrides `run()` to execute a LangGraph classifier/delegation graph instead of exposing tools directly.
 
 ## Source Files
 
@@ -19,6 +21,7 @@ The base runtime owns the common execution loop, chat history conversion, stream
 | `services/agent/app/runtime/hooks.py` | Run-local hook data contracts passed through the runtime lifecycle. |
 | `services/agent/app/runtime/loop_logging.py` | Development logging, LLM tracing, and provider token metadata extraction. |
 | `services/agent/app/runtime/usage.py` | Runtime-only token usage contracts collected from provider metadata. |
+| `services/agent/app/runtime/router.py` | Router graph runtime, route metadata contract, classifier helpers, and general fallback. |
 | `services/agent/app/runtime/registry.py` | Maps stored `agent_type` values to concrete runtime classes. |
 | `services/agent/app/runtime/tool_context.py` | Injects shared service clients into tool builders. |
 | `services/agent/app/services/chat_service.py` | Loads agent config, creates provider/runtime, manages SSE and persistence. |
@@ -30,9 +33,11 @@ The base runtime owns the common execution loop, chat history conversion, stream
 
 | `agent_type` | Runtime class | Notes |
 |--------------|---------------|-------|
-| `accountant` | `AccountantAgent` | Only supported concrete agent today. |
+| `accountant` | `AccountantAgent` | Finance-focused agent with invoice, expense, partner, and CompanyBook tools. |
+| `inventory` | `InventoryAgent` | Stock tracking, item management, import preview review, reorder advice. |
+| `router` | `RouterAgent` | Classifies each chat turn and delegates to accountant, inventory, or a general fallback. |
 
-Adding another agent requires updating the `AgentType` literal in `models/agent.py`, implementing a `BaseAgent` subclass, registering it in `runtime/registry.py`, and adding a dedicated document in this folder.
+Adding another agent requires updating the `AgentType` literal in `models/agent.py`, implementing a `BaseAgent` subclass, registering it in `runtime/registry.py`, and adding a dedicated document in this folder. If the new agent does not use the shared `AgentExecutor` loop, document its `run()` override and usage collection contract.
 
 ## Runtime Contract
 
@@ -82,6 +87,7 @@ sequenceDiagram
     participant Chat as ChatService
     participant Registry
     participant Runtime as BaseAgent subclass
+    participant Router as Router graph
     participant Executor as LangChain AgentExecutor
     participant Tools
     participant LLM
@@ -93,17 +99,28 @@ sequenceDiagram
     Chat->>Registry: create_agent_runtime(agent, llm, user_id, tool_context)
     Registry-->>Chat: concrete BaseAgent subclass
     Chat->>Runtime: run(message, history)
-    Runtime->>Runtime: prepare_run_input() and prepare_tools()
-    Runtime->>Runtime: build system prompt and tool list
-    Runtime->>Executor: input, chat_history, agent_scratchpad
-    Executor->>LLM: prompt + history + tools
-    opt model requests tool
-        Executor->>Tools: validated tool call
-        Tools-->>Executor: compact tool result
-        Executor->>LLM: tool result context
+    alt accountant or inventory runtime
+        Runtime->>Runtime: prepare_run_input() and prepare_tools()
+        Runtime->>Runtime: build system prompt and tool list
+        Runtime->>Executor: input, chat_history, agent_scratchpad
+        Executor->>LLM: prompt + history + tools
+        opt model requests tool
+            Executor->>Tools: validated tool call
+            Tools-->>Executor: compact tool result
+            Executor->>LLM: tool result context
+        end
+        LLM-->>Runtime: streamed chunks or final output
+        Runtime->>Runtime: on_event(), on_chunk(), on_run_end()
+    else router runtime
+        Runtime->>Router: classify route and select branch
+        Router->>LLM: structured route decision
+        opt specialist selected and configured
+            Router->>Runtime: child accountant/inventory run()
+        end
+        opt general fallback
+            Router->>LLM: no-tool general response
+        end
     end
-    LLM-->>Runtime: streamed chunks or final output
-    Runtime->>Runtime: on_event(), on_chunk(), on_run_end()
     Runtime-->>Chat: text chunks
     Chat->>Runtime: consume_usage_events()
     Chat->>Mongo: persist user and assistant messages
@@ -113,7 +130,7 @@ sequenceDiagram
 
 ## Data Flow
 
-`BaseAgent.run()` converts persisted `MessageSchema` history into LangChain messages:
+For `AccountantAgent` and `InventoryAgent`, `BaseAgent.run()` converts persisted `MessageSchema` history into LangChain messages:
 
 | Stored role | LangChain message |
 |-------------|-------------------|
@@ -132,6 +149,8 @@ During execution, the runtime reads LangChain stream events, applies hook callba
 
 Runtime token usage is collected from provider/LangChain metadata on stream chunks and final model output. The runtime records only provider-reported facts; it does not estimate missing token counts and does not calculate billing cost.
 
+`RouterAgent.run()` uses the same public generator signature but executes `router -> accountant | inventory | general`. It records non-persisted `route_metadata` for `ChatService` to emit as an optional `route` SSE event after messages and usage have been persisted.
+
 ## Dependency Graph
 
 ```mermaid
@@ -142,10 +161,14 @@ graph TD
     ChatService --> ProviderFactory["LLMProviderFactory"]
     ChatService --> Registry["runtime/registry.py"]
     Registry --> BaseAgent["BaseAgent"]
+    Registry --> RouterAgent["RouterAgent"]
     BaseAgent --> Hooks["runtime/hooks.py"]
     BaseAgent --> LoopLogging["runtime/loop_logging.py"]
     BaseAgent --> LangChain["LangChain AgentExecutor"]
-    BaseAgent --> ConcreteAgent["Concrete BaseAgent subclass"]
+    BaseAgent --> ConcreteAgent["Accountant/Inventory runtime"]
+    RouterAgent --> LangGraph["LangGraph StateGraph"]
+    RouterAgent --> ChildRuntime["Optional child runtimes"]
+    RouterAgent --> LoopLogging
     ConcreteAgent --> Tools["LangChain tools"]
     Tools --> ToolContext["ToolContext"]
     ToolContext --> Business["Business Service client"]
@@ -173,11 +196,13 @@ Base runtime does not write persisted data. Ownership is split as follows:
 | RAG documents and retrieval | Knowledge Base Service |
 | External registry details | CompanyBook.BG adapter and Business partner writes |
 
-Concrete tools may call downstream services through `ToolContext`, but runtime classes should stay focused on prompt and tool selection.
+Concrete tools may call downstream services through `ToolContext`, but runtime classes should stay focused on prompt and tool selection. Router child lookup is owned by `ChatService`; `RouterAgent` receives already constructed child runtimes and must not call repositories directly.
 
 ## Usage Ledger
 
 `usage_events` is an Agent-owned raw ledger for completed LLM calls. `BaseAgent` collects `LLMUsageEvent` values during a run, and `ChatService` drains them with `consume_usage_events()` after runtime completion.
+
+Router usage is persisted through this same contract. Classifier and general fallback LLM calls are attributed to the router agent id. Delegated accountant or inventory calls keep the child runtime's agent id, so usage attribution follows the actual runtime that called the provider.
 
 The persisted record includes `user_id`, `agent_id`, `conversation_id`, provider, model, optional LangChain `run_id`, LLM call index, provider-reported token counts, stream chunk/character counts, timing fields, `source="agent_runtime"`, and `created_at`. The repository stores an `idempotency_key` of `conversation_id:run_id:llm_call_index` so retries do not double-count the same provider call.
 
@@ -198,6 +223,7 @@ Usage persistence happens only after conversation message persistence succeeds. 
 
 - All agent execution is scoped by gateway-injected `user_id`.
 - Concrete agents must expose only tools that match their role and scope.
+- Router agents must delegate only to runtimes created by `ChatService` for the same authenticated user and compatible company scope.
 - Tools must use service clients, not cross-service repositories.
 - Write tools should require explicit user confirmation before persisting domain records.
 - Assigned agents must respect their `company_id`; unassigned agents must resolve a company before company-scoped writes.
@@ -242,4 +268,4 @@ Use this outline for each concrete agent document:
 
 ## Current Gaps
 
-- Future agents need one document each and should be linked from `docs/agents/README.md`.
+- Router-linked hidden delegate fields (`parent_agent_id`, `delegate_role`, and visibility/list filtering) are not part of the public `AgentInDB` or `AgentResponse` schema yet. `ChatService` can resolve documents with those fields when present, but router creation currently does not auto-provision hidden delegates.

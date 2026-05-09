@@ -6,7 +6,7 @@ from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import ReturnDocument
 
-from app.models.conversation import ConversationInDB, MessageSchema
+from app.models.shared.conversation import ConversationInDB, MessageSchema
 
 
 class ConversationRepository:

@@ -20,8 +20,8 @@ from app.dependencies import (
     get_partner_service,
 )
 from app.main import app
-from app.models.company import CompanyCreate, CompanyInDB
-from app.models.financial import (
+from app.company.models import CompanyCreate, CompanyInDB
+from app.financial.models import (
     ExpenseInDB,
     ExpenseItem,
     FinancialSummaryRequest,
@@ -29,7 +29,7 @@ from app.models.financial import (
     InvoiceInDB,
     InvoiceItem,
 )
-from app.models.partner import PartnerInDB
+from app.partner.models import PartnerInDB
 
 
 def _now() -> datetime:

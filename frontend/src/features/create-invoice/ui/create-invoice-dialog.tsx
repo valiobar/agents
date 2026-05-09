@@ -27,7 +27,7 @@ export function CreateInvoiceDialog() {
         </Button>
       </DialogTrigger>
 
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Create invoice</DialogTitle>
           <DialogDescription>Add invoice details and line items.</DialogDescription>

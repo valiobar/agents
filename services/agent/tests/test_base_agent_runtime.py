@@ -11,9 +11,10 @@ from langchain_core.language_models.fake_chat_models import FakeListChatModel
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.models.agent import AgentConfig, AgentInDB
+from app.models.shared.agent import AgentConfig, AgentInDB
+from app.config import settings
 from app.runtime.base_agent import BaseAgent
-from app.runtime.hooks import AgentRunChunk, AgentRunEvent, AgentRunInput
+from app.runtime.hooks import AgentRunChunk, AgentRunEvent, AgentRunInput, AgentRunResult
 
 
 def fake_agent() -> AgentInDB:
@@ -71,6 +72,27 @@ def chain_end_event(output: str) -> dict:
     }
 
 
+def tool_start_event(tool_name: str, input_payload: dict | None = None) -> dict:
+    return {
+        "event": "on_tool_start",
+        "name": tool_name,
+        "run_id": "tool-run-1",
+        "data": {"input": input_payload or {}},
+    }
+
+
+def tool_end_event(tool_name: str, *, output_payload: dict | None = None, duration_ms: int | None = None) -> dict:
+    data: dict[str, object] = {"output": output_payload or {}}
+    if duration_ms is not None:
+        data["duration_ms"] = duration_ms
+    return {
+        "event": "on_tool_end",
+        "name": tool_name,
+        "run_id": "tool-run-1",
+        "data": data,
+    }
+
+
 class FakeExecutor:
     events: list[dict] = []
     last_payload: dict | None = None
@@ -124,6 +146,28 @@ class SuppressingAgent(NoHookAgent):
 class ExplodingChunkAgent(NoHookAgent):
     async def on_chunk(self, chunk: AgentRunChunk) -> AgentRunChunk:
         raise RuntimeError("chunk hook failure")
+
+
+class MetadataTrackingAgent(NoHookAgent):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.duplicate_hits = 0
+        self.run_seen_sizes: list[int] = []
+
+    async def on_event(self, event: AgentRunEvent) -> AgentRunEvent:
+        if event.event == "on_tool_start":
+            query = event.raw.get("data", {}).get("input", {}).get("query")
+            if isinstance(query, str):
+                seen = event.metadata.setdefault("queries", set())
+                if query in seen:
+                    self.duplicate_hits += 1
+                else:
+                    seen.add(query)
+        return event
+
+    async def on_run_end(self, result: AgentRunResult) -> AgentRunResult:
+        self.run_seen_sizes.append(len(result.metadata.get("queries", set())))
+        return result
 
 
 class BaseAgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
@@ -199,6 +243,67 @@ class BaseAgentRuntimeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(usage[0].output_tokens, 7)
         self.assertEqual(usage[0].total_tokens, 17)
         self.assertEqual(runtime.consume_usage_events(), [])
+
+    async def test_run_metadata_is_scoped_per_run(self) -> None:
+        runtime = MetadataTrackingAgent(
+            fake_agent(),
+            FakeListChatModel(responses=["unused"]),
+            "user-1",
+            fake_context(),
+        )
+
+        FakeExecutor.events = [
+            tool_start_event("search_inventory_stock", {"query": "sku-1"}),
+            tool_start_event("search_inventory_stock", {"query": "sku-1"}),
+            chain_end_event("done"),
+        ]
+        with patch("app.runtime.base_agent.create_tool_calling_agent", return_value=object()), patch(
+            "app.runtime.base_agent.AgentExecutor",
+            FakeExecutor,
+        ):
+            _ = [token async for token in runtime.run("first", [])]
+
+        FakeExecutor.events = [
+            tool_start_event("search_inventory_stock", {"query": "sku-1"}),
+            chain_end_event("done"),
+        ]
+        with patch("app.runtime.base_agent.create_tool_calling_agent", return_value=object()), patch(
+            "app.runtime.base_agent.AgentExecutor",
+            FakeExecutor,
+        ):
+            _ = [token async for token in runtime.run("second", [])]
+
+        self.assertEqual(runtime.duplicate_hits, 1)
+        self.assertEqual(runtime.run_seen_sizes, [1, 1])
+
+    async def test_tool_trace_ui_events_emit_only_when_debug_flag_enabled(self) -> None:
+        runtime = NoHookAgent(fake_agent(), FakeListChatModel(responses=["unused"]), "user-1", fake_context())
+        FakeExecutor.events = [
+            tool_start_event(
+                "search_inventory_stock",
+                {"query": "iphone", "token": "secret-token"},
+            ),
+            tool_end_event("search_inventory_stock", output_payload={"rows": 1}, duration_ms=42),
+            chain_end_event("done"),
+        ]
+
+        with patch("app.runtime.base_agent.create_tool_calling_agent", return_value=object()), patch(
+            "app.runtime.base_agent.AgentExecutor",
+            FakeExecutor,
+        ), patch.object(settings, "agent_environment", "development"), patch.object(
+            settings,
+            "agent_debug_tool_traces",
+            True,
+        ):
+            _ = [token async for token in runtime.run("trace", [])]
+            ui_events = runtime.consume_ui_events()
+
+        tool_traces = [payload for event_name, payload in ui_events if event_name == "tool_trace"]
+        self.assertEqual(len(tool_traces), 2)
+        self.assertEqual(tool_traces[0]["tool_name"], "search_inventory_stock")
+        self.assertEqual(tool_traces[0]["phase"], "on_tool_start")
+        self.assertIn("REDACTED", tool_traces[0]["args_preview"])
+        self.assertEqual(tool_traces[1]["duration_ms"], 42)
 
 
 if __name__ == "__main__":

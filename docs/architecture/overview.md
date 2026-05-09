@@ -1,13 +1,13 @@
 # Architecture Overview
 
-A microservice platform for creating and orchestrating AI agents. Users log in, create agents (starting with an Accountant Agent), and interact with them through a chat interface. Agents have access to a tax regulation knowledge base, user-uploaded documents, and structured business data (companies, partners, invoices, expenses) through the Business Service. The system is designed so that new agent types can be added as independent modules and, in the future, collaborate on complex tasks.
+A microservice platform for creating and orchestrating AI agents. Users log in, create accountant, inventory, or router agents, and interact with them through a chat interface. Agents have access to a tax regulation knowledge base, user-uploaded documents, and structured business data (companies, partners, invoices, expenses, and inventory) through the Business Service. The system is designed so that new agent types can be added as independent modules and, in the future, collaborate on complex tasks.
 
 ## Current Implementation Status
 
 > **Phase 1 complete** — Infrastructure, Auth Service, and API Gateway are fully implemented.
 > **Phase 2 Knowledge Base complete** — document ingestion, MongoDB metadata, ChromaDB vectors, OpenAI embeddings, and retrieval are implemented.
-> **Phase 3 Agent Service core complete** — agent CRUD, conversation persistence, provider factory, Accountant Agent runtime, RAG tool, calculator tool, and SSE chat streaming are implemented.
-> **Business Service split active** — companies, partners, invoices, expenses, financial summaries, and their MongoDB indexes are owned by the Business Service. Gateway keeps the public URLs stable while routing `/companies`, `/partners`, `/invoices`, and `/expenses` to Business.
+> **Phase 3 Agent Service core complete** — agent CRUD, conversation persistence, provider factory, Accountant, Inventory, and Router runtimes, RAG/calculator/date tools, Business-backed tools, and SSE chat streaming are implemented.
+> **Business Service split active** — companies, partners, invoices, expenses, inventory, financial summaries, and their MongoDB indexes are owned by the Business Service. Gateway keeps the public URLs stable while routing `/companies`, `/partners`, `/invoices`, `/expenses`, and `/inventory/*` to Business.
 > **Company-scoped workflows complete** — Business owns companies and partners; agents, invoices, expenses, and document uploads can be scoped by company; invoices snapshot supplier/recipient parties; Knowledge Base user uploads/retrieval are company-scoped; and the Accountant Agent can import Bulgarian partners from CompanyBook.BG before invoice creation.
 > Remaining Orchestrator work is planned. Features marked with *(planned)* are not yet built.
 
@@ -17,8 +17,9 @@ A microservice platform for creating and orchestrating AI agents. Users log in, 
 | Auth Service (register, login, Google OAuth, JWT, refresh) | ✅ Implemented |
 | API Gateway (JWT, rate limiting, SSE proxy) | ✅ Implemented |
 | Agent Service Core (CRUD, chat, providers, RAG/calculator tools) | ✅ Implemented |
-| Business Service (companies, partners, invoices, expenses, summaries) | ✅ Implemented |
+| Business Service (companies, partners, invoices, expenses, inventory, summaries) | ✅ Implemented |
 | Agent Financial Tools (Business-backed invoice/expense tools) | ✅ Implemented |
+| Agent Inventory Tools And Router Runtime | ✅ Implemented |
 | Knowledge Base Service | ✅ Implemented |
 | Orchestrator Service | ⬜ Stub only (health endpoint) |
 | Frontend (Next.js) | ✅ Implemented |
@@ -94,7 +95,7 @@ graph TD
 | Frontend | Next.js 14, App Router, Tailwind, shadcn/ui | 3000 | Web app, auth UI, dashboard, chat, invoice/expense forms |
 | API Gateway | FastAPI (Python) | 8000 | JWT validation, routing, rate limiting, SSE pass-through |
 | Auth Service | FastAPI (Python) | 8001 | Registration, login, Google OAuth callback, JWT issuance |
-| Agent Service | FastAPI + LangChain (Python) | 8002 | Agent CRUD, conversation management, Accountant Agent runtime, SSE chat, provider selection, RAG/calculator/financial/CompanyBook tool orchestration |
+| Agent Service | FastAPI + LangChain/LangGraph (Python) | 8002 | Agent CRUD, conversation management, Accountant, Inventory, and Router runtimes, SSE chat, provider selection, RAG/calculator/financial/inventory/CompanyBook tool orchestration |
 | Knowledge Base Service | FastAPI (Python) | 8003 | Document ingestion, ChromaDB management, RAG retrieval |
 | Orchestrator Service *(planned)* | FastAPI (Python) | 8004 | Multi-agent coordination via Redis Streams (stub in Phase 1) |
 | Business Service | FastAPI (Python) | 8005 | Company, partner, invoice, expense, and financial summary APIs and rules |
@@ -151,7 +152,7 @@ sequenceDiagram
 
 ## Chat Flow (SSE Streaming)
 
-A user's message is streamed token-by-token using Server-Sent Events. The gateway validates JWTs, injects `x-user-id`, and passes through the Agent Service stream without buffering. For new chats, the Agent Service builds the provider, chat model, and runtime before creating the conversation, so setup failures do not leave empty conversation records behind.
+A user's message is streamed token-by-token using Server-Sent Events. The gateway validates JWTs, injects `x-user-id`, and passes through the Agent Service stream without buffering. For new chats, the Agent Service builds the provider, chat model, and runtime before creating the conversation, so setup failures do not leave empty conversation records behind. Router chats may emit optional `route` metadata after persistence and before `done`.
 
 ```mermaid
 sequenceDiagram
@@ -182,11 +183,11 @@ sequenceDiagram
     FE-->>User: tokens rendered live
 ```
 
-`BaseAgent` creates a LangChain `AgentExecutor` for each turn. The executor handles model-requested `rag_search` and `calculator` tool calls, feeds tool results back into the model, and streams only the final user-facing model chunks as SSE `token` events. If a provider does not emit streaming chat chunks, the runtime falls back to the executor's final output once.
+`BaseAgent` creates a LangChain `AgentExecutor` for accountant and inventory turns. The executor handles model-requested tools, feeds tool results back into the model, and streams only the final user-facing model chunks as SSE `token` events. If a provider does not emit streaming chat chunks, the runtime falls back to the executor's final output once. `RouterAgent` uses a LangGraph classifier/delegation graph to choose accountant, inventory, or a general fallback for each turn.
 
 ## Two Data Paths
 
-The Agent Service runtime works with unstructured knowledge through `rag_search`, simple arithmetic through `calculator`, and structured business data through Business-backed invoice, expense, partner, and summary tools.
+The Agent Service runtime works with unstructured knowledge through `rag_search`, simple arithmetic through `calculator`, and structured business data through Business-backed invoice, expense, partner, inventory, and summary tools.
 
 ```mermaid
 graph TD
@@ -226,7 +227,7 @@ graph TD
 
 **Unstructured data** (tax regulations, company policies) is stored as vector embeddings in ChromaDB by the implemented Knowledge Base Service. The Agent Service queries it through `POST /retrieve` when the model invokes `rag_search`. Assigned agents include their `company_id` so uploaded-document results come only from that company; unassigned agents still use shared `global_tax` context.
 
-**Structured business data** (companies, partners, invoices, expenses, financial summaries) is stored in MongoDB by the Business Service. The Accountant Agent can query invoices and expenses, summarize totals, search/create partners, import Bulgarian partners from CompanyBook.BG, create invoices, and record expenses through tools that call Business over internal HTTP.
+**Structured business data** (companies, partners, invoices, expenses, inventory, and financial summaries) is stored in MongoDB by the Business Service. The Accountant Agent can query invoices and expenses, summarize totals, search/create partners, import Bulgarian partners from CompanyBook.BG, create invoices, and record expenses through tools that call Business over internal HTTP. The Inventory Agent can search inventory, inspect stock, manage items/locations/movements, and review import previews through Business-backed tools.
 
 Financial write tools require explicit user confirmation before creating records. Tool code calls `BusinessClient`, not repositories, so REST and chat behavior share Business validation, calculations, and user scoping without duplicating ownership inside Agent.
 
@@ -283,12 +284,13 @@ BaseAgent (abstract)
   get_system_prompt() -> str
   run(message, history) -> async generator
 
-AccountantAgent(BaseAgent)     -- current
+AccountantAgent(BaseAgent)     -- finance tools
+InventoryAgent(BaseAgent)      -- inventory tools
+RouterAgent(BaseAgent)         -- LangGraph classifier/delegation
 LegalAgent(BaseAgent)          -- future
-HRAgent(BaseAgent)             -- future
 ```
 
-Adding a new agent type means creating a single file with a class that defines its tools and system prompt. No changes to routing, the gateway, or the frontend.
+Adding a new tool agent type usually means creating a single file with a class that defines its tools and system prompt, then registering it in `runtime/registry.py`. Graph-style agents like Router can override `run()` while preserving the same `BaseAgent` constructor and `ChatService` orchestration boundary.
 
 ### 4. Factory Pattern -- LLM Providers
 
@@ -407,7 +409,7 @@ Stores all structured data across services:
 - OpenAI embeddings through `EmbeddingProvider`
 
 ### Phase 3 Agent Service Core
-- Agent Service: Agent CRUD, conversation persistence, Accountant Agent runtime, SSE chat streaming
+- Agent Service: Agent CRUD, conversation persistence, Accountant, Inventory, and Router runtimes, SSE chat streaming
 - Provider factory for OpenAI, Anthropic, DeepSeek, and Ollama
 - Phase 3 tools: `rag_search` and `calculator`
 
@@ -416,9 +418,13 @@ Stores all structured data across services:
 - Company and partner ownership, company-scoped agents/invoices/documents, invoice party snapshots, and Bulgarian invoice PDF fields
 
 ### Business Service Split
-- Business Service owns companies, partners, invoices, expenses, financial summaries, and related MongoDB indexes on internal port 8005
-- Gateway routes `/companies`, `/partners`, `/invoices`, and `/expenses` to Business while keeping `/agents` and `/conversations` on Agent
+- Business Service owns companies, partners, invoices, expenses, inventory, financial summaries, and related MongoDB indexes on internal port 8005
+- Gateway routes `/companies`, `/partners`, `/invoices`, `/expenses`, and `/inventory/*` to Business while keeping `/agents` and `/conversations` on Agent
 - Agent financial and partner tools call Business through `BusinessClient` instead of in-process domain repositories/services
+
+### Router And Inventory Runtime
+- Inventory Agent runtime and tools call Business inventory APIs for items, locations, movements, stock levels, search, and import previews.
+- Router Agent runtime uses LangGraph to classify each chat turn and delegate to accountant, inventory, or general fallback while preserving the public chat SSE endpoint.
 
 ### Later Phases
 - Orchestrator Service activated with Redis Streams

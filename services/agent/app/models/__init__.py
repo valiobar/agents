@@ -1,4 +1,4 @@
-from app.models.agent import (
+from app.models.shared.agent import (
     AgentConfig,
     AgentCreate,
     AgentInDB,
@@ -7,15 +7,15 @@ from app.models.agent import (
     AgentUpdate,
     ProviderName,
 )
-from app.models.chat import ChatEvent, ChatRequest
-from app.models.company import CompanyResponse
-from app.models.conversation import (
+from app.models.shared.chat import ChatEvent, ChatRequest
+from app.models.financial.company import CompanyResponse
+from app.models.shared.conversation import (
     ConversationInDB,
     ConversationResponse,
     MessageRole,
     MessageSchema,
 )
-from app.models.document import DocumentResponse, DocumentStatus
+from app.models.shared.document import DocumentResponse, DocumentStatus
 from app.models.financial import (
     CurrencyCode,
     ExpenseCategory,
@@ -38,7 +38,7 @@ from app.models.financial import (
     MoneyModel,
     SummaryGroupBy,
 )
-from app.models.receipt import (
+from app.models.financial.receipt import (
     ConfirmExtractedExpenseRequest,
     ConfirmExtractedExpenseResponse,
     CurrencyCode as ReceiptCurrencyCode,

@@ -11,10 +11,16 @@ from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import BaseTool
 
 from app.config import settings
-from app.models.agent import AgentInDB
-from app.models.conversation import MessageSchema
+from app.models.shared.agent import AgentInDB
+from app.models.shared.conversation import MessageSchema
 from app.runtime.hooks import AgentRunChunk, AgentRunEvent, AgentRunInput, AgentRunResult
-from app.runtime.loop_logging import AgentLoopLogger, LLMTraceState, event_data, stringify_chunk_content
+from app.runtime.loop_logging import (
+    AgentLoopLogger,
+    LLMTraceState,
+    event_data,
+    sanitize_tool_trace,
+    stringify_chunk_content,
+)
 from app.runtime.tool_context import ToolContext
 from app.runtime.usage import LLMUsageEvent
 
@@ -44,6 +50,7 @@ class BaseAgent(ABC):
         self.user_id = user_id
         self.tool_context = tool_context
         self._usage_events: list[LLMUsageEvent] = []
+        self._ui_events: list[tuple[str, dict[str, Any]]] = []
 
     @abstractmethod
     def get_tools(self) -> list[BaseTool]:
@@ -77,6 +84,14 @@ class BaseAgent(ABC):
     def consume_usage_events(self) -> list[LLMUsageEvent]:
         events = self._usage_events
         self._usage_events = []
+        return events
+
+    def emit_ui_event(self, event_name: str, payload: dict[str, Any]) -> None:
+        self._ui_events.append((event_name, payload))
+
+    def consume_ui_events(self) -> list[tuple[str, dict[str, Any]]]:
+        events = self._ui_events
+        self._ui_events = []
         return events
 
     async def _apply_prepare_run_input(self, run_input: AgentRunInput) -> AgentRunInput:
@@ -150,6 +165,12 @@ class BaseAgent(ABC):
                 version="v2",
             ):
                 loop_logger.track_event(raw_event, llm_state)
+                if settings.should_emit_tool_traces and raw_event.get("event") in {
+                    "on_tool_start",
+                    "on_tool_end",
+                    "on_tool_error",
+                }:
+                    self.emit_ui_event("tool_trace", sanitize_tool_trace(raw_event))
 
                 event = await self._apply_on_event(AgentRunEvent.from_raw(raw_event, run_input.metadata))
                 text = _stream_text_from_event(event.raw)

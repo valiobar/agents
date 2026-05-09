@@ -11,8 +11,8 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.clients.business import BusinessClientError
-from app.models.companybook import CompanyBookCompanyDetail
-from app.models.partner import PartnerResponse
+from app.models.financial.companybook import CompanyBookCompanyDetail
+from app.models.financial.partner import PartnerResponse
 from app.tools.companybook import (
     ImportCompanyBookPartnerArgs,
     _import_companybook_partner_for_company,

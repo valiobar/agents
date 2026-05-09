@@ -4,6 +4,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     agent_environment: str = Field(default="production", validation_alias="AGENT_ENV")
+    agent_debug_tool_traces: bool = Field(
+        default=False,
+        validation_alias="AGENT_DEBUG_TOOL_TRACES",
+    )
 
     mongodb_url: str = "mongodb://mongodb:27017"
     db_name: str = "agents"
@@ -69,6 +73,10 @@ class Settings(BaseSettings):
     @property
     def is_development(self) -> bool:
         return self.agent_environment.lower() == "development"
+
+    @property
+    def should_emit_tool_traces(self) -> bool:
+        return self.is_development and self.agent_debug_tool_traces
 
 
 settings = Settings()

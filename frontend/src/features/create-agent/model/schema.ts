@@ -11,7 +11,7 @@ export const createAgentSchema = z.object({
     emptyStringToNull,
     z.string().max(1000, "Description is too long").nullable().optional(),
   ),
-  agent_type: z.literal("accountant").default("accountant"),
+  agent_type: z.enum(["accountant", "inventory", "router"]).default("accountant"),
   company_id: z.preprocess(
     emptyStringToNull,
     z.string().max(64, "Company ID is too long").nullable().optional(),
@@ -19,7 +19,7 @@ export const createAgentSchema = z.object({
   config: z.object({
     provider: z.enum(["openai", "anthropic", "deepseek", "ollama"]).default("openai"),
     model: z.preprocess(emptyStringToNull, z.string().nullable().optional()),
-    temperature: z.coerce.number().min(0).max(2).default(0.2),
+    temperature: z.coerce.number().min(0).max(2).default(0.3),
     system_prompt_override: z.preprocess(
       emptyStringToNull,
       z.string().max(4000, "System prompt is too long").nullable().optional(),

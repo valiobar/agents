@@ -2,12 +2,14 @@
 
 ## Current State
 
-The Agent Service owns agent instances, chat runtime orchestration, conversation history, and the Accountant Agent tool set (`rag_search`, `calculator`, `date_helper`, Business-backed company/partner tools, Business-backed `query_invoices`, `query_expenses`, `get_financial_summary`, `create_invoice`, `record_expense`, and CompanyBook partner lookup tools).
+The Agent Service owns agent instances, chat runtime orchestration, conversation history, and agent-specific tool sets. The Accountant Agent provides `rag_search`, `calculator`, `date_helper`, Business-backed company/partner tools, Business-backed `query_invoices`, `query_expenses`, `get_financial_summary`, `create_invoice`, `record_expense`, and CompanyBook partner lookup tools. The Inventory Agent provides `search_inventory_stock`, `list_inventory_items`, `get_stock_levels`, `list_low_stock_items`, `get_stock_movements`, `list_inventory_locations`, `create_inventory_item`, `update_inventory_item`, `record_stock_movement`, import preview tools, `rag_search` (inventory-scoped), `calculator`, `date_helper`, and company resolution tools for unassigned agents. The Router Agent classifies each chat turn and delegates to accountant, inventory, or a no-tool general fallback while keeping the same `/agents/{id}/chat` SSE endpoint.
 
 ## Implemented Responsibilities
 
 - User-scoped Agent CRUD.
 - Accountant Agent runtime.
+- Inventory Agent runtime.
+- Router Agent runtime with LangGraph classification/delegation.
 - SSE chat streaming.
 - MongoDB conversation persistence.
 - Raw LLM usage ledger persistence in the Agent-owned `usage_events` collection.
@@ -17,7 +19,7 @@ The Agent Service owns agent instances, chat runtime orchestration, conversation
 - Development-only agent loop logging with provider-reported token metadata tracing when available.
 - RAG access through the Knowledge Base Service `POST /retrieve` endpoint.
 - Safe arithmetic calculations through a restricted calculator tool.
-- Business HTTP access for company validation, partner lookup/write, invoice and expense query/write, and financial summary aggregation.
+- Business HTTP access for company validation, partner lookup/write, invoice and expense query/write, inventory workflows, and financial summary aggregation.
 - Structured financial query and write tools over Business Service contracts.
 - CompanyBook.BG partner lookup tools that search Bulgarian companies, import a selected UIC into the scoped partner workflow through Business, and leave invoice creation on the existing `create_invoice` tool path.
 
@@ -45,7 +47,13 @@ routes/
   agents.py
   conversations.py
 clients/
-  business.py
+  business/
+    __init__.py
+    base.py
+    companies.py
+    partners.py
+    financial.py
+    inventory.py
 services/
   agent_service.py
   chat_service.py
@@ -64,9 +72,12 @@ models/
   financial.py
   partner.py
   companybook.py
+  inventory.py
 runtime/
   base_agent.py
   accountant.py
+  inventory.py
+  router.py
   hooks.py
   loop_logging.py
   registry.py
@@ -84,24 +95,27 @@ tools/
   dates.py
   financial.py
   companybook.py
+  inventory.py
 ```
 
 ## Main Patterns
 
 - **Layered architecture:** routes never touch MongoDB or service clients directly.
 - **Repository pattern:** Agent-owned MongoDB access is isolated, including immutable raw usage events.
-- **Strategy pattern:** each agent type implements the shared `BaseAgent` contract.
+- **Strategy pattern:** each agent type implements the shared `BaseAgent` contract. Router uses the same registry contract but overrides `run()` for graph execution.
 - **Hook contract:** concrete agents may override optional `BaseAgent` lifecycle hooks without replacing the shared event loop.
 - **Registry pattern:** `create_agent_runtime()` maps `agent_type` to a concrete runtime class.
 - **Factory pattern:** `LLMProviderFactory` creates provider wrappers for OpenAI, Anthropic, DeepSeek, and Ollama.
 - **Client adapter pattern:** `BusinessClient` wraps Business Service HTTP calls and translates HTTP failures into tool/service-safe errors.
-- **Thin tools:** LangChain tools adapt stable contracts. `rag_search` calls Knowledge Base over HTTP; `calculator` and `date_helper` run locally; financial and CompanyBook tools call Business through `BusinessClient`, never Business repositories directly.
+- **Thin tools:** LangChain tools adapt stable contracts. `rag_search` calls Knowledge Base over HTTP; `calculator` and `date_helper` run locally; financial, CompanyBook, and inventory tools call Business through `BusinessClient`, never Business repositories directly.
 
 ## Runtime Contract
 
-The chat service loads the agent, creates the configured provider, resolves the runtime from the registry, then creates or validates the conversation and streams chunks from `BaseAgent.run()`. New conversations are created only after provider and runtime setup succeeds. Conversations store the agent's current `company_id`; an existing `conversation_id` is accepted only when it belongs to the same user, agent, and company scope.
+The chat service loads the agent, creates the configured provider, resolves the runtime from the registry, then creates or validates the conversation and streams chunks from `BaseAgent.run()`. For router agents, `ChatService` also resolves compatible child runtimes before conversation creation. New conversations are created only after provider and runtime setup succeeds. Conversations store the agent's current `company_id`; an existing `conversation_id` is accepted only when it belongs to the same user, agent, and company scope.
 
 `BaseAgent.run()` creates a LangChain `AgentExecutor` for each turn. The executor receives the user input and recent chat history, executes model-requested tool calls, feeds tool results back to the model, and emits final user-facing chunks for SSE `token` events. If the provider does not produce streaming chunks, the runtime returns the executor's final output once.
+
+`RouterAgent.run()` uses a LangGraph shape of `router -> accountant | inventory | general`. The classifier returns a structured route decision with `route`, `reason`, and `confidence`. If the predicted specialist runtime is unavailable, the executed route becomes `general` while the predicted route is preserved for metadata. Router general fallback uses the router LLM with no tools.
 
 Concrete runtimes may override optional hooks defined by `BaseAgent`: `prepare_run_input()`, `prepare_tools()`, `on_run_start()`, `on_event()`, `on_chunk()`, `on_run_end()`, and `on_run_error()`. Hooks receive typed run-local objects from `runtime/hooks.py` and share one metadata dict for the turn. Hooks may mutate runtime inputs, tools, events, streamed text, final fallback output, metadata, and runtime usage event lists. They must not emit SSE, append messages, call FastAPI dependencies, or write repositories directly.
 
@@ -109,16 +123,21 @@ When the Agent Service runs with `AGENT_ENV=development`, `BaseAgent.run()` also
 
 After a successful runtime run, `ChatService` drains `runtime.consume_usage_events()`. It persists filtered provider-reported token facts to `usage_events` only after conversation messages are saved. Usage persistence failures are logged but do not change an otherwise successful chat into an SSE `error`. The runtime and repository store raw token facts only; they do not calculate billing cost, enforce quotas, or apply model prices.
 
-Only `agent_type: "accountant"` is currently valid. The Accountant Agent can list and resolve companies, query invoices, query expenses, summarize financial records, search/create partners, search CompanyBook.BG for Bulgarian companies, import a selected registry company as a partner, create invoices, and record expenses. Business-domain reads and writes are delegated to Business Service. Invoice and expense write tools require explicit user confirmation before `confirmed=true` is sent to the tool.
+If the runtime exposes `route_metadata`, `ChatService` emits an optional `route` SSE event after message and usage persistence and before `done`. Route metadata is not written into persisted conversation messages.
+
+Three agent types are currently valid: `"accountant"`, `"inventory"`, and `"router"`. The Accountant Agent can list and resolve companies, query invoices, query expenses, summarize financial records, search/create partners, search CompanyBook.BG for Bulgarian companies, import a selected registry company as a partner, create invoices, and record expenses. The Inventory Agent can search inventory items, check stock levels, list low-stock items, view movement history, create/update items, record stock movements, and review/confirm/cancel supplier invoice import previews. The Router Agent delegates finance and inventory turns to compatible specialist runtimes and handles general turns with a no-tool fallback. Accountant and inventory write tools require explicit user confirmation before `confirmed=true` is sent to the tool.
+
+Router child selection is exact-scope and user-scoped. `ChatService` first looks for linked delegate documents via `parent_agent_id` and `delegate_role`, then falls back to the latest same-user, same-company specialist agent for compatibility. The public agent schema does not yet include typed delegate fields or hide delegate documents from list responses; router creation currently does not auto-provision hidden delegates.
 
 ## Business Service Boundary
 
 Agent does not mount company, partner, invoice, expense, or financial summary REST routes. The gateway routes those public prefixes to Business Service while `/agents` and `/conversations` continue to route to Agent Service.
 
-Agent consumes Business Service in two places:
+Agent consumes Business Service in these places:
 
 - `AgentService` validates non-null `company_id` values during create, update, and company-filtered list operations through `GET /companies/{company_id}/exists`.
 - Accountant tools use `BusinessClient` for company listing/resolution, partner lookup/write, invoice and expense query/write, and financial summary calls.
+- Inventory tools use `BusinessClient` for inventory item CRUD, stock level queries, movement recording, location listing, inventory search, and import preview lifecycle.
 
 `BusinessClient` is backed by a long-lived `httpx.AsyncClient` created during FastAPI lifespan startup. It forwards `x-user-id` on every request and normalizes Business HTTP/transport failures into `BusinessClientError`.
 
@@ -160,7 +179,7 @@ Missing external-provider API keys fail during chat setup and are returned as SS
 
 | Collection | Owner | Purpose | Key indexes |
 |------------|-------|---------|-------------|
-| `agents` | Agent Service | User-created agent configurations. | `user_id + created_at`, `user_id + name`, `user_id + company_id + created_at` |
+| `agents` | Agent Service | User-created agent configurations. | `user_id + created_at`, `user_id + name`, `user_id + agent_type + company_id + created_at`, `user_id + company_id + created_at` |
 | `conversations` | Agent Service | User/assistant message history and conversation scope. | `user_id + agent_id + updated_at`, `user_id + agent_id + company_id + updated_at`, `user_id + created_at` |
 | `usage_events` | Agent Service | Immutable raw LLM usage facts for completed provider calls. | `user_id + created_at`, `user_id + provider + model + created_at`, `conversation_id + created_at`, `agent_id + created_at`, unique `idempotency_key` |
 

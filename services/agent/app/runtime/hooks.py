@@ -5,7 +5,7 @@ from typing import Any
 
 from langchain_core.tools import BaseTool
 
-from app.models.conversation import MessageSchema
+from app.models.shared.conversation import MessageSchema
 from app.runtime.usage import LLMUsageEvent
 
 RunMetadata = dict[str, Any]

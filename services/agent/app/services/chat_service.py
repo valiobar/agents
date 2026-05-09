@@ -4,19 +4,26 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 import json
 import logging
+from typing import Literal
 
 from app.config import settings
-from app.models.chat import ChatRequest
-from app.models.conversation import MessageSchema
-from app.models.usage import UsageEventCreate
+from app.models.shared.agent import AgentInDB
+from app.models.shared.chat import ChatRequest
+from app.models.shared.conversation import MessageSchema
+from app.models.shared.usage import UsageEventCreate
 from app.repositories.agent_repo import AgentRepository
 from app.repositories.conversation_repo import ConversationRepository
 from app.repositories.usage_repo import UsageRepository
+from app.runtime.base_agent import BaseAgent
 from app.runtime.providers.factory import LLMProviderFactory
 from app.runtime.registry import create_agent_runtime
+from app.runtime.router import RouterAgent
 from app.runtime.tool_context import ToolContext
+from langchain_core.language_models.chat_models import BaseChatModel
 
 logger = logging.getLogger(__name__)
+
+DelegateRole = Literal["accountant", "inventory"]
 
 
 def sse(event: str, data: dict) -> str:
@@ -36,6 +43,65 @@ class ChatService:
         self.usage_repo = usage_repo
         self.tool_context = tool_context
 
+    def _create_llm(self, agent: AgentInDB) -> BaseChatModel:
+        provider = LLMProviderFactory.create(agent.config.provider)
+        return provider.create_chat_model(agent.config.model, agent.config.temperature)
+
+    async def _create_runtime(self, user_id: str, agent: AgentInDB) -> BaseAgent:
+        llm = self._create_llm(agent)
+        runtime = create_agent_runtime(agent, llm, user_id, self.tool_context)
+
+        if isinstance(runtime, RouterAgent):
+            accountant = await self._create_router_child_runtime(user_id, agent, "accountant")
+            inventory = await self._create_router_child_runtime(user_id, agent, "inventory")
+            runtime.configure_children(
+                accountant_runtime=accountant,
+                inventory_runtime=inventory,
+                fallback_llm=llm,
+            )
+        return runtime
+
+    async def _create_router_child_runtime(
+        self,
+        user_id: str,
+        router: AgentInDB,
+        delegate_role: DelegateRole,
+    ) -> BaseAgent | None:
+        child = await self.agent_repo.get_delegate_for_router(user_id, router.id, delegate_role)
+        if child is None:
+            # Backward-compatible fallback for routers created before delegate linking existed.
+            child = await self.agent_repo.get_latest_by_type(user_id, delegate_role, router.company_id)
+
+        if child is None:
+            return None
+
+        if child.company_id != router.company_id:
+            logger.warning(
+                "router_delegate_company_mismatch",
+                extra={
+                    "router_id": router.id,
+                    "child_id": child.id,
+                    "child_agent_type": child.agent_type,
+                    "child_company_id": child.company_id,
+                    "router_company_id": router.company_id,
+                    "user_id": user_id,
+                },
+            )
+            return None
+
+        llm = self._create_llm(child)
+        return create_agent_runtime(child, llm, user_id, self.tool_context)
+
+    def _route_metadata_payload(self, runtime: BaseAgent) -> dict | None:
+        route_metadata = getattr(runtime, "route_metadata", None)
+        if route_metadata is None:
+            return None
+        if hasattr(route_metadata, "model_dump"):
+            return route_metadata.model_dump()
+        if isinstance(route_metadata, dict):
+            return route_metadata
+        return None
+
     async def stream_chat(
         self,
         user_id: str,
@@ -48,9 +114,7 @@ class ChatService:
             return
 
         try:
-            provider = LLMProviderFactory.create(agent.config.provider)
-            llm = provider.create_chat_model(agent.config.model, agent.config.temperature)
-            runtime = create_agent_runtime(agent, llm, user_id, self.tool_context)
+            runtime = await self._create_runtime(user_id, agent)
         except Exception as exc:
             yield sse("error", {"message": str(exc)})
             return
@@ -135,5 +199,14 @@ class ChatService:
                     "conversation_id": conversation.id,
                 },
             )
+
+        route_payload = self._route_metadata_payload(runtime)
+        if route_payload is not None:
+            yield sse("route", route_payload)
+
+        for ui_event_name, ui_payload in runtime.consume_ui_events():
+            if ui_event_name == "tool_trace" and not settings.should_emit_tool_traces:
+                continue
+            yield sse(ui_event_name, ui_payload)
 
         yield sse("done", {"conversation_id": conversation.id})

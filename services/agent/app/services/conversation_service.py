@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
-from app.models.conversation import ConversationInDB
+from app.models.shared.conversation import ConversationInDB
 from app.repositories.conversation_repo import ConversationRepository
 
 

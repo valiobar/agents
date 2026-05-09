@@ -11,7 +11,7 @@ The gateway validates the JWT and injects `x-user-id` before proxying to interna
 
 ## Business Service
 
-The Business Service owns companies, partners, invoice and expense records, financial summaries, and the business rules for those records. Public URLs stay unchanged through the API Gateway: `/companies`, `/partners`, `/invoices`, and `/expenses` route to Business.
+The Business Service owns companies, partners, invoice and expense records, financial summaries, inventory records, and the business rules for those records. Public URLs stay unchanged through the API Gateway: `/companies`, `/partners`, `/invoices`, `/expenses`, and `/inventory/*` route to Business.
 
 ### Company And Partner Workflow
 
@@ -50,7 +50,7 @@ Partner reads/updates/deletes include `company_id` as a query parameter. Cross-u
 
 ## Agent Service
 
-The Agent Service owns user-created agents, Accountant Agent chat runtime, conversation history, provider selection, and tool orchestration. Business-domain tools call the Business Service over internal HTTP, so chat-created invoices, expenses, and partners use the same validation rules as the public Business APIs.
+The Agent Service owns user-created agents, Accountant, Inventory, and Router chat runtimes, conversation history, provider selection, and tool orchestration. Business-domain tools call the Business Service over internal HTTP, so chat-created invoices, expenses, partners, inventory items, and stock movements use the same validation rules as the public Business APIs.
 
 ### Create Agent
 
@@ -59,13 +59,13 @@ POST /agents
 Content-Type: application/json
 ```
 
-Creates an Accountant Agent for the authenticated user.
+Creates an agent for the authenticated user.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `name` | string | Yes | - | User-visible agent name, 1-120 characters. |
 | `description` | string or null | No | `null` | Optional description, max 1000 characters. |
-| `agent_type` | string | No | `accountant` | Phase 3 supports only `accountant`. |
+| `agent_type` | string | No | `accountant` | `accountant`, `inventory`, or `router`. |
 | `company_id` | string or null | No | `null` | Optional owned company assignment. Required for partner/financial write tools. |
 | `config.provider` | string | No | `openai` or `DEFAULT_AGENT_PROVIDER` | `openai`, `anthropic`, `deepseek`, or `ollama`. |
 | `config.model` | string or null | No | Provider default | Model override for the selected provider. |
@@ -199,9 +199,9 @@ Accept: text/event-stream
 Content-Type: application/json
 ```
 
-Streams an Accountant Agent response. If `conversation_id` is omitted, the service creates a new conversation for the agent's current `company_id` and emits a `conversation` event before `start`. Provider and runtime setup happen before new conversation creation, so setup failures return an SSE `error` without inserting an empty conversation.
+Streams an agent response. If `conversation_id` is omitted, the service creates a new conversation for the agent's current `company_id` and emits a `conversation` event before `start`. Provider and runtime setup happen before new conversation creation, so setup failures return an SSE `error` without inserting an empty conversation.
 
-The runtime uses LangChain `AgentExecutor` to execute model-requested tools before final response streaming. `rag_search` calls Knowledge, financial and partner tools call Business over internal HTTP, and `calculator` runs locally. `done` is emitted only after the user and assistant messages are persisted.
+Accountant and inventory runtimes use LangChain `AgentExecutor` to execute model-requested tools before final response streaming. `rag_search` calls Knowledge; financial, partner, and inventory tools call Business over internal HTTP; `calculator` runs locally. Router runtimes classify the turn and delegate to a compatible accountant/inventory runtime or a no-tool general fallback. `done` is emitted only after the user and assistant messages are persisted.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
@@ -228,9 +228,14 @@ data: {"conversation_id":"665f1f77c9e0f7a8093bb722"}
 event: token
 data: {"content":"20% VAT on 100 is 20."}
 
+event: route
+data: {"predicted_route":"accountant","executed_route":"accountant","reason":"VAT question","confidence":0.94,"company_id":"665f1f77c9e0f7a8093bb701","company_scope":"assigned"}
+
 event: done
 data: {"conversation_id":"665f1f77c9e0f7a8093bb722"}
 ```
+
+`route` is optional and router-only. It is emitted after persistence and before `done`; older clients can ignore it and continue relying on `token`, `error`, and `done`.
 
 Error events use:
 
@@ -572,6 +577,151 @@ Content-Type: application/json
 
 Business exposes this endpoint for internal Agent tool calls at `http://business:8005/financial-summary`. It is not a public Gateway route. The request can filter by `company_id`, `partner_id`, date range, and optional grouping, then returns invoice, expense, and net totals for the authenticated `x-user-id`.
 
+### Inventory Endpoints
+
+Business exposes inventory as public gateway routes under `/inventory/*`. All inventory requests are authenticated and user-scoped; company-scoped routes require `company_id` and validate ownership.
+
+| Endpoint | Purpose | Request highlights | Response |
+|----------|---------|--------------------|----------|
+| `POST /inventory/items` | Create inventory item | Body includes `company_id`, `sku`, `name`, `unit`; optional `barcode`, `aliases`, `reorder_point`, `target_stock_level`, `supplier_partner_id` | `201` `InventoryItemResponse` |
+| `GET /inventory/items?company_id=...` | List items | Optional filters: `category`, `is_active`, `sku`, `barcode`, `limit`, `offset` | `200` `InventoryItemResponse[]` |
+| `GET /inventory/items/{item_id}?company_id=...` | Get item | Query `company_id` required | `200` `InventoryItemResponse` |
+| `PATCH /inventory/items/{item_id}?company_id=...` | Update item | Partial body fields from `InventoryItemUpdate` | `200` `InventoryItemResponse` |
+| `POST /inventory/locations` | Create location | Body includes `company_id`, `name`, optional `description`, `is_default` | `201` `InventoryLocationResponse` |
+| `GET /inventory/locations?company_id=...` | List locations | Optional `limit`, `offset` | `200` `InventoryLocationResponse[]` |
+| `GET /inventory/locations/{location_id}?company_id=...` | Get location | Query `company_id` required | `200` `InventoryLocationResponse` |
+| `PATCH /inventory/locations/{location_id}?company_id=...` | Update location | Partial body fields from `InventoryLocationUpdate` | `200` `InventoryLocationResponse` |
+| `POST /inventory/movements` | Create stock movement | Body includes `company_id`, `item_id`, `location_id`, `movement_type`, `quantity_delta` | `201` `StockMovementResponse` |
+| `GET /inventory/movements?company_id=...` | List stock movements | Optional filters: `item_id`, `location_id`, `movement_type`, `limit`, `offset` | `200` `StockMovementResponse[]` |
+| `GET /inventory/levels?company_id=...` | Get derived stock levels | Optional filters: `item_id`, `location_id`, `below_reorder_point` | `200` `StockLevel[]` |
+| `POST /inventory/search` | Search inventory | Body includes `company_id`, `query`; optional `include_stock`, `min_confidence`, `limit` | `200` `InventorySearchResponse` |
+| `POST /inventory/import-previews` | Create import preview | Body includes `company_id`, source metadata, and supplier line candidates | `201` `InventoryImportPreviewResponse` |
+| `GET /inventory/import-previews?company_id=...` | List previews | Optional filters: `preview_status`, `limit`, `offset` | `200` `InventoryImportPreviewResponse[]` |
+| `GET /inventory/import-previews/{preview_id}` | Get preview | Path id only | `200` `InventoryImportPreviewResponse` |
+| `PATCH /inventory/import-previews/{preview_id}` | Update preview lines | Body includes updated `lines` review payload | `200` `InventoryImportPreviewResponse` |
+| `POST /inventory/import-previews/{preview_id}/confirm` | Confirm preview | No body required | `200` `InventoryImportResult` |
+| `POST /inventory/import-previews/{preview_id}/cancel` | Cancel preview | No body required | `200` `InventoryImportPreviewResponse` |
+
+Invoice create form uses `POST /inventory/search` for line-item linking with debounced input. Typical selector request:
+
+```bash
+curl -X POST http://localhost:8000/inventory/search \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "company_id": "'"$COMPANY_ID"'",
+    "query": "SKU-123",
+    "include_stock": true,
+    "min_confidence": 0.5,
+    "limit": 20
+  }'
+```
+
+Example response `200 OK` (`InventorySearchResponse`):
+
+```json
+{
+  "query": "SKU-123",
+  "matches": [
+    {
+      "item_id": "665f1f77c9e0f7a8093bb901",
+      "sku": "SKU-123",
+      "name": "Widget A",
+      "confidence": "1.0000",
+      "available_quantity": "42.0000"
+    }
+  ]
+}
+```
+
+Example create preview request:
+
+```bash
+curl -X POST http://localhost:8000/inventory/import-previews \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "company_id": "'"$COMPANY_ID"'",
+    "source_type": "invoice",
+    "source_id": "'"$INVOICE_ID"'",
+    "lines": [
+      {
+        "candidate": {
+          "description": "iPhone 15 Pro 128GB",
+          "sku": "IPH15P-128",
+          "barcode": null,
+          "quantity": "5",
+          "unit": "pcs",
+          "unit_price": "999.00"
+        },
+        "location_id": "'"$LOCATION_ID"'"
+      }
+    ]
+  }'
+```
+
+Response `201 Created`:
+
+```json
+{
+  "id": "665f1f77c9e0f7a8093bb888",
+  "user_id": "665f1f77c9e0f7a8093bb700",
+  "company_id": "665f1f77c9e0f7a8093bb701",
+  "document_id": null,
+  "source_type": "invoice",
+  "source_id": "665f1f77c9e0f7a8093bb733",
+  "status": "draft",
+  "lines": [
+    {
+      "candidate": {
+        "description": "iPhone 15 Pro 128GB",
+        "sku": "IPH15P-128",
+        "barcode": null,
+        "quantity": "5",
+        "unit": "pcs",
+        "unit_price": "999.00"
+      },
+      "matched_item_id": null,
+      "proposed_item": {
+        "sku": "IPH15P-128",
+        "name": "iPhone 15 Pro 128GB",
+        "unit": "pcs"
+      },
+      "location_id": "665f1f77c9e0f7a8093bb799",
+      "receipt_quantity": "5",
+      "warnings": ["No exact SKU match found; proposed item will be created on confirm."]
+    }
+  ],
+  "created_at": "2026-04-26T11:10:00Z",
+  "updated_at": "2026-04-26T11:10:00Z"
+}
+```
+
+Example confirm and cancel requests:
+
+```bash
+curl -X POST "http://localhost:8000/inventory/import-previews/$PREVIEW_ID/confirm" \
+  -H "Authorization: Bearer $TOKEN"
+
+curl -X POST "http://localhost:8000/inventory/import-previews/$PREVIEW_ID/cancel" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Confirm response `200 OK` (`InventoryImportResult`):
+
+```json
+{
+  "preview_id": "665f1f77c9e0f7a8093bb888",
+  "items_created": 1,
+  "items_updated": 0,
+  "movements_created": 1
+}
+```
+
+Cancel response `200 OK` returns the same `InventoryImportPreviewResponse` shape with `"status": "cancelled"`.
+
+Invoice and inventory are connected inside Business: when an invoice transitions from `draft` to `sent`, linked line items can produce stock issue movements.
+
 ### Business Service Errors
 
 | Status | Typical Cause |
@@ -694,7 +844,7 @@ POST /retrieve
 Content-Type: application/json
 ```
 
-Retrieves relevant chunks from `global_tax` and, when a user id and `company_id` are available, `user_{user_id}` filtered by company. The endpoint is designed for the Agent Service, but it is also available through the gateway for integration testing.
+Retrieves relevant chunks from `global_tax`, `global_inventory`, and when a user id and `company_id` are available, `user_{user_id}` filtered by company. The endpoint is designed for the Agent Service, but it is also available through the gateway for integration testing.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
@@ -703,6 +853,7 @@ Retrieves relevant chunks from `global_tax` and, when a user id and `company_id`
 | `company_id` | string | Required for user documents | `null` | Company filter for uploaded chunks. |
 | `top_k` | integer | No | `5` | Number of chunks to return, from 1 to 20. |
 | `include_global_tax` | boolean | No | `true` | Search shared tax documents. |
+| `include_global_inventory` | boolean | No | `false` | Search shared inventory reference documents (movement types, import guides, best practices). |
 | `include_user_documents` | boolean | No | `true` | Search the user's uploaded documents. |
 | `allow_legacy_all_company_documents` | boolean | No | `false` | Explicit compatibility flag for legacy all-company retrieval. |
 | `filters` | object | No | `{}` | ChromaDB metadata filters. Values may be string, number, or boolean. |

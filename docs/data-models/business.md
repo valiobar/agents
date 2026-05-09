@@ -1,19 +1,37 @@
 # Business Service Data Models
 
-The Business Service owns the `companies`, `partners`, `invoices`, `expenses`, and invoice `counters` MongoDB collections. Ownership is scoped by the gateway-authenticated `user_id` that arrives as `x-user-id`; partners and invoices also carry `company_id`.
+The Business Service owns the `companies`, `partners`, `invoices`, `expenses`, `counters`, `inventory_items`, `inventory_locations`, `stock_movements`, and `inventory_import_previews` MongoDB collections. Ownership is scoped by the gateway-authenticated `user_id` that arrives as `x-user-id`; company domains additionally carry `company_id`.
 
-Business exposes public domain APIs through Gateway for `/companies`, `/partners`, `/invoices`, and `/expenses`. Agent tools call Business directly over internal HTTP for company lookup, partner import/create, invoice and expense operations, and financial summaries through `POST /financial-summary`.
+Business exposes public domain APIs through Gateway for `/companies`, `/partners`, `/invoices`, `/expenses`, and `/inventory/*`. Agent tools call Business directly over internal HTTP for company lookup, partner/invoice/expense/inventory operations, and financial summaries through `POST /financial-summary`.
 
 Source files:
 
-- `services/business/app/models/company.py`
-- `services/business/app/models/partner.py`
-- `services/business/app/models/financial.py`
-- `services/business/app/repositories/company_repo.py`
-- `services/business/app/repositories/partner_repo.py`
-- `services/business/app/repositories/invoice_repo.py`
-- `services/business/app/repositories/expense_repo.py`
-- `services/business/app/services/financial_summary_service.py`
+- `services/business/app/company/models.py`
+- `services/business/app/partner/models.py`
+- `services/business/app/financial/models.py`
+- `services/business/app/company/repositories/company_repo.py`
+- `services/business/app/partner/repositories/partner_repo.py`
+- `services/business/app/financial/repositories/invoice_repo.py`
+- `services/business/app/financial/repositories/expense_repo.py`
+- `services/business/app/financial/services/financial_summary_service.py`
+- `services/business/app/inventory/models.py`
+- `services/business/app/inventory/repositories/inventory_item_repo.py`
+- `services/business/app/inventory/repositories/inventory_location_repo.py`
+- `services/business/app/inventory/repositories/stock_movement_repo.py`
+- `services/business/app/inventory/repositories/inventory_import_preview_repo.py`
+- `services/business/app/inventory/services/inventory_service.py`
+- `services/business/app/inventory/services/inventory_search_service.py`
+- `services/business/app/inventory/services/inventory_import_service.py`
+
+## Inventory Collections
+
+`inventory_items` stores company-scoped item master data (SKU, aliases, barcode, unit, reorder settings, supplier link).
+
+`inventory_locations` stores company-scoped stock locations, including optional default location.
+
+`stock_movements` stores append-only quantity deltas (`receipt`, `issue`, `adjustment`, `transfer_in`, `transfer_out`, `return`) and source metadata for idempotency.
+
+`inventory_import_previews` stores draft/confirmed/cancelled supplier import review state before applying inventory writes.
 
 ## `companies` Collection
 

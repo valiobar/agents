@@ -2,7 +2,7 @@
 
 ## Current State
 
-The Business Service owns structured business data and rules for companies, partners, invoices, expenses, invoice counters, and financial summaries. Public clients reach it through the API Gateway at the existing domain prefixes `/companies`, `/partners`, `/invoices`, and `/expenses`. Agent and Knowledge services call Business over the internal Docker network when they need company validation or business records.
+The Business Service owns structured business data and rules for companies, partners, invoices, expenses, invoice counters, financial summaries, and inventory workflows. Public clients reach it through the API Gateway at `/companies`, `/partners`, `/invoices`, `/expenses`, and `/inventory/*`. Agent and Knowledge services call Business over the internal Docker network when they need company validation or business records.
 
 ## Responsibility
 
@@ -15,6 +15,9 @@ Implemented responsibilities:
 - Invoice creation, listing, retrieval, metadata/status update, totals, snapshots, and invoice numbering.
 - Expense creation, listing, retrieval, item totals, and deductible amount calculation.
 - Financial summary aggregation across invoice and expense records.
+- Inventory item/location CRUD, stock movements, stock level derivation, and inventory search.
+- Supplier invoice import preview lifecycle (create/list/get/update/confirm/cancel).
+- Invoice stock deduction for inventory-linked lines on `draft -> sent` transition.
 - Internal company ownership validation through `GET /companies/{company_id}/exists`.
 - MongoDB index creation for business collections during startup.
 
@@ -23,28 +26,58 @@ Business explicitly does not own chat runtime, SSE streaming, LLM providers, RAG
 ## Internal Architecture
 
 ```text
-routes/
-  companies.py             # Company issuer profile CRUD and existence check
-  partners.py              # Company-scoped partner CRUD
-  invoices.py              # Invoice create/list/get/update
-  expenses.py              # Expense create/list/get
-  financial_summary.py     # Internal summary aggregation endpoint
-services/
-  company_service.py       # Company ownership and delete protection
-  partner_service.py       # Partner ownership and invoice delete protection
-  invoice_service.py       # Invoice snapshots, numbering, totals, status rules
-  expense_service.py       # Expense item totals and deductible amounts
-  financial_summary_service.py
-repositories/
-  company_repo.py          # User-scoped company MongoDB access
-  partner_repo.py          # User/company-scoped partner MongoDB access
-  invoice_repo.py          # Invoice, counters, filters, summary aggregation
-  expense_repo.py          # Expense filters and summary aggregation
-  financial_utils.py       # Decimal, date, and currency helpers
-models/
-  company.py               # Company request/response schemas
-  partner.py               # Partner request/response schemas
-  financial.py             # Invoice, expense, and summary schemas
+app/
+  main.py
+  config.py
+  dependencies.py
+company/
+  models.py
+  routes/
+    companies.py           # Company issuer profile CRUD and existence check
+  repositories/
+    company_repo.py        # User-scoped company MongoDB access
+  services/
+    company_service.py     # Company ownership and delete protection
+partner/
+  models.py
+  routes/
+    partners.py            # Company-scoped partner CRUD
+  repositories/
+    partner_repo.py        # User/company-scoped partner MongoDB access
+  services/
+    partner_service.py     # Partner ownership and invoice delete protection
+financial/
+  models.py                # Invoice, expense, and summary schemas
+  routes/
+    invoices.py            # Invoice create/list/get/update
+    expenses.py            # Expense create/list/get
+    financial_summary.py   # Internal summary aggregation endpoint
+  repositories/
+    invoice_repo.py        # Invoice, counters, filters, summary aggregation
+    expense_repo.py        # Expense filters and summary aggregation
+    financial_utils.py     # Decimal, date, and currency helpers
+  services/
+    invoice_service.py     # Invoice snapshots, numbering, totals, status rules
+    expense_service.py     # Expense item totals and deductible amounts
+    financial_summary_service.py
+inventory/
+  models.py
+  routes/
+    inventory_items.py
+    inventory_locations.py
+    inventory_movements.py
+    inventory_levels.py
+    inventory_search.py
+    inventory_import_previews.py
+  repositories/
+    inventory_item_repo.py
+    inventory_location_repo.py
+    stock_movement_repo.py
+    inventory_import_preview_repo.py
+  services/
+    inventory_service.py
+    inventory_search_service.py
+    inventory_import_service.py
 utils/
   db.py                    # Motor client lifecycle and index creation
 ```
@@ -76,6 +109,24 @@ All public calls go through the gateway at `http://localhost:8000`. Direct inter
 | `POST /expenses` | Implemented | Record an expense |
 | `GET /expenses?category=...&date_from=...` | Implemented | List current-user expenses with filters |
 | `GET /expenses/{expense_id}` | Implemented | Get one current-user expense |
+| `POST /inventory/items` | Implemented | Create inventory item (company-scoped) |
+| `GET /inventory/items?company_id=...` | Implemented | List inventory items with optional filters |
+| `GET /inventory/items/{item_id}?company_id=...` | Implemented | Get one company item |
+| `PATCH /inventory/items/{item_id}?company_id=...` | Implemented | Update one company item |
+| `POST /inventory/locations` | Implemented | Create inventory location |
+| `GET /inventory/locations?company_id=...` | Implemented | List locations |
+| `GET /inventory/locations/{location_id}?company_id=...` | Implemented | Get one location |
+| `PATCH /inventory/locations/{location_id}?company_id=...` | Implemented | Update one location |
+| `POST /inventory/movements` | Implemented | Append stock movement |
+| `GET /inventory/movements?company_id=...` | Implemented | List stock movements |
+| `GET /inventory/levels?company_id=...` | Implemented | Get derived stock levels |
+| `POST /inventory/search` | Implemented | Search inventory with optional stock aggregation |
+| `POST /inventory/import-previews` | Implemented | Create import preview draft |
+| `GET /inventory/import-previews?company_id=...` | Implemented | List previews |
+| `GET /inventory/import-previews/{preview_id}` | Implemented | Get preview |
+| `PATCH /inventory/import-previews/{preview_id}` | Implemented | Update preview lines |
+| `POST /inventory/import-previews/{preview_id}/confirm` | Implemented | Confirm preview and apply receipts |
+| `POST /inventory/import-previews/{preview_id}/cancel` | Implemented | Cancel preview |
 | `POST /financial-summary` | Implemented | Internal summary endpoint used by Agent tools |
 
 ## Domain Rules
@@ -87,6 +138,8 @@ Partners represent reusable clients, suppliers, or both. They are scoped by `use
 Invoices require `company_id` and either `partner_id` or full `recipient` details. Business validates the company, resolves the partner inside the same company when present, snapshots supplier and recipient data, generates an invoice number through `counters`, calculates line totals server-side, and stores money as BSON `Decimal128`.
 
 Expenses are user-scoped. They can be recorded with a single `amount` or optional item lines; if lines are present, the stored amount is calculated from line totals. Deductible expenses store `deductible_amount = amount * deductible_rate`; non-deductible expenses store `0.00`.
+
+Inventory is company-scoped. Items enforce unique SKU per `user_id + company_id`; levels are derived from append-only stock movements. Import preview confirmation can create/update items and record `receipt` movements. Invoice status transition `draft -> sent` can issue inventory for lines that carry `inventory_item_id`.
 
 Delete protection:
 
@@ -105,6 +158,14 @@ Supported `group_by` values:
 - `month`
 
 The response includes top-level totals, per-bucket totals when grouped, `totals_by_currency`, configured `exchange_rates_to_bgn`, and `unsupported_currencies`. The service can convert `BGN` and `EUR`; unsupported currencies stay visible in `totals_by_currency` and are listed in `unsupported_currencies`.
+
+## Cross-Domain Dependencies
+
+Business owns its internal cross-domain dependencies:
+
+- `financial` depends on `company` and `partner` for validation/snapshots and on `inventory` for stock issue on invoice send.
+- `inventory` depends on `company` ownership checks.
+- External services (Agent, Knowledge, Gateway) never import these modules; they use Business HTTP contracts.
 
 ## Configuration
 
@@ -219,7 +280,7 @@ PY
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | `401 Missing x-user-id header` on direct service calls | Bypassing the gateway without internal auth context | Use the gateway or include `x-user-id` for internal smoke tests. |
-| Company/partner/invoice/expense returns `404` | The id is invalid, missing, or belongs to another user/company | Use the owning user's token and matching `company_id`. |
+| Company/partner/invoice/expense/inventory resource returns `404` | The id is invalid, missing, or belongs to another user/company | Use the owning user's token and matching `company_id`. |
 | Company delete returns `409 Company has invoices` | Existing invoices reference the company | Keep the company for historical invoices. |
 | Company delete returns `409 Company has partners` | Existing partners reference the company | Delete unreferenced partners first or keep the company. |
 | Partner delete returns `409 Partner has invoices` | Existing invoices reference the partner | Keep the partner for historical invoices. |

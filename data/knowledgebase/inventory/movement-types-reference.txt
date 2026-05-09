@@ -1,0 +1,52 @@
+Inventory Movement Types Reference
+==================================
+
+receipt
+-------
+Purpose: Increase stock when goods are received (supplier delivery, production output, return-to-stock).
+Stock effect: Positive quantity.
+Rules:
+- Must reference destination location when location tracking is enabled.
+- Quantity must be greater than zero.
+- Prefer linking to purchase or import source when available.
+
+issue
+-----
+Purpose: Decrease stock when goods leave inventory (sale fulfillment, consumption, scrap).
+Stock effect: Negative quantity.
+Rules:
+- Quantity must be greater than zero.
+- Source location is required for multi-location setups.
+- Should not drop available stock below zero unless negative stock is explicitly allowed.
+
+adjustment
+----------
+Purpose: Correct discrepancies between physical and system counts.
+Stock effect: Positive or negative based on correction direction.
+Rules:
+- A clear reason is required (count correction, damage, expiry, shrinkage).
+- Review and approval is recommended for large absolute adjustments.
+
+transfer_in
+-----------
+Purpose: Record destination side of an inter-location transfer.
+Stock effect: Positive quantity at destination location.
+Rules:
+- Usually paired with transfer_out of the same item and quantity.
+- Destination location is required.
+
+transfer_out
+------------
+Purpose: Record source side of an inter-location transfer.
+Stock effect: Negative quantity at source location.
+Rules:
+- Usually paired with transfer_in of the same item and quantity.
+- Source location is required.
+
+return
+------
+Purpose: Record returned items (customer return, vendor return handling).
+Stock effect: Usually positive for customer returns to stock; can be negative when returning to supplier.
+Rules:
+- Clarify return direction in notes or reason code.
+- Keep linkage to invoice, order, or return authorization when possible.

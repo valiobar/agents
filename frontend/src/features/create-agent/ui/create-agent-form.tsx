@@ -7,6 +7,7 @@ import { useForm } from "react-hook-form";
 
 import { useCompanies } from "@/entities/company/api/queries";
 import { ApiError } from "@/shared/api/errors";
+import { cn } from "@/shared/lib/cn";
 import { Button } from "@/shared/ui/button";
 import { EmptyState } from "@/shared/ui/empty-state";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/shared/ui/form";
@@ -34,6 +35,30 @@ const PROVIDERS: Array<CreateAgentInput["config"]["provider"]> = [
   "deepseek",
   "ollama",
 ];
+const AGENT_TYPES: Array<{
+  value: CreateAgentInput["agent_type"];
+  label: string;
+  description: string;
+  disabled?: boolean;
+  badge?: string;
+}> = [
+  {
+    value: "accountant",
+    label: "Accountant",
+    description: "Financial tools for invoices, expenses, and summaries.",
+  },
+  {
+    value: "inventory",
+    label: "Inventory",
+    description: "Stock tracking, item search, and movement workflows.",
+  },
+  {
+    value: "router",
+    label: "Router",
+    description:
+      "Classifies each chat turn and delegates to accountant, inventory, or general help.",
+  },
+];
 
 export function CreateAgentForm({ onSuccess, onCancel }: Readonly<CreateAgentFormProps>) {
   const { data: session } = useSession();
@@ -57,6 +82,7 @@ export function CreateAgentForm({ onSuccess, onCancel }: Readonly<CreateAgentFor
     },
     mode: "onSubmit",
   });
+  const selectedAgentType = form.watch("agent_type");
 
   async function onSubmit(values: CreateAgentInput) {
     setError(null);
@@ -99,6 +125,58 @@ export function CreateAgentForm({ onSuccess, onCancel }: Readonly<CreateAgentFor
 
         <FormField
           control={form.control}
+          name="agent_type"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Agent type</FormLabel>
+              <FormControl>
+                <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {AGENT_TYPES.map((agentType) => (
+                    <button
+                      key={agentType.value}
+                      type="button"
+                      className={cn(
+                        "flex rounded-lg border p-3 text-left transition-colors",
+                        agentType.disabled
+                          ? "cursor-not-allowed opacity-70"
+                          : "cursor-pointer hover:border-muted-foreground/40",
+                        selectedAgentType === agentType.value && "border-primary bg-primary/5",
+                      )}
+                      aria-pressed={selectedAgentType === agentType.value}
+                      disabled={agentType.disabled}
+                      onClick={() => {
+                        if (agentType.disabled) return;
+                        field.onChange(agentType.value);
+                        if (
+                          agentType.value === "router" &&
+                          form.getValues("config.temperature") === 0.3
+                        ) {
+                          form.setValue("config.temperature", 0.1, { shouldDirty: true });
+                        }
+                      }}
+                    >
+                      <span className="space-y-1">
+                        <span className="flex items-center gap-2 text-sm font-medium">
+                          {agentType.label}
+                          {agentType.badge ? (
+                            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
+                              {agentType.badge}
+                            </span>
+                          ) : null}
+                        </span>
+                        <span className="text-xs text-muted-foreground">{agentType.description}</span>
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+
+        <FormField
+          control={form.control}
           name="company_id"
           render={({ field }) => (
             <FormItem>
@@ -123,6 +201,8 @@ export function CreateAgentForm({ onSuccess, onCancel }: Readonly<CreateAgentFor
               </Select>
               <p className="text-xs text-muted-foreground">
                 Optional, but required for company document retrieval and invoice creation tools.
+                For a router, assigning a company limits delegation to specialists compatible with
+                that company scope.
               </p>
               <FormMessage />
             </FormItem>

@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.dependencies import get_expense_service
 from app.main import app
-from app.models.financial import ExpenseCreate, ExpenseFilters, ExpenseInDB
+from app.financial.models import ExpenseCreate, ExpenseFilters, ExpenseInDB
 
 
 def _now() -> datetime:

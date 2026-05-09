@@ -37,6 +37,16 @@ class RetrievalService:
                 )
             )
 
+        if request.include_global_inventory:
+            chunks.extend(
+                await self.vector_store.search(
+                    collection_name=self.vector_store.global_inventory_collection_name(),
+                    query_embedding=query_embedding,
+                    top_k=request.top_k,
+                    where=global_filters or None,
+                )
+            )
+
         if request.include_user_documents:
             if not user_id:
                 raise HTTPException(status_code=422, detail="user_id is required for user document retrieval")

@@ -8,12 +8,15 @@ This folder documents each concrete agent runtime and the shared contracts every
 |----------|---------|
 | [`base-agent.md`](./base-agent.md) | Shared runtime contract, lifecycle, data boundaries, dependency graph, and per-agent documentation checklist. |
 | [`accountant.md`](./accountant.md) | Accountant runtime workflows, tools, prompt rules, data flow, dependencies, guardrails, and verification. |
+| [`inventory.md`](./inventory.md) | Inventory runtime workflows, tools, prompt rules, data flow, dependencies, guardrails, and verification. |
 
 ## Current Agent Catalog
 
 | Agent type | Runtime class | Status | Detailed doc |
 |------------|---------------|--------|--------------|
 | `accountant` | `AccountantAgent` | Implemented | [`accountant.md`](./accountant.md) |
+| `inventory` | `InventoryAgent` | Implemented | [`inventory.md`](./inventory.md) |
+| `router` | `RouterAgent` | Implemented | [`router.md`](./router.md) |
 
 ## Documentation Standard
 

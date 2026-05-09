@@ -5,7 +5,7 @@ from typing import Any
 import httpx
 from fastapi import UploadFile
 
-from app.models.receipt import ExpenseDraftResponse
+from app.models.financial.receipt import ExpenseDraftResponse
 
 
 class KnowledgeClientError(Exception):

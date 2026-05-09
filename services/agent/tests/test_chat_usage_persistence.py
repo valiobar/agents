@@ -9,9 +9,9 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.models.agent import AgentConfig, AgentInDB
-from app.models.chat import ChatRequest
-from app.models.conversation import ConversationInDB
+from app.models.shared.agent import AgentConfig, AgentInDB
+from app.models.shared.chat import ChatRequest
+from app.models.shared.conversation import ConversationInDB
 from app.runtime.usage import LLMUsageEvent
 from app.services.chat_service import ChatService
 
@@ -118,6 +118,30 @@ class FakeRuntime:
         return [fake_usage_event()]
 
 
+class FakeDelegatedRuntime(FakeRuntime):
+    def consume_usage_events(self):
+        event = fake_usage_event()
+        return [
+            LLMUsageEvent(
+                user_id=event.user_id,
+                agent_id="delegate-inventory-1",
+                provider=event.provider,
+                model=event.model,
+                run_id=event.run_id,
+                llm_call_index=event.llm_call_index,
+                input_tokens=event.input_tokens,
+                output_tokens=event.output_tokens,
+                total_tokens=event.total_tokens,
+                stream_chunks=event.stream_chunks,
+                stream_chars=event.stream_chars,
+                started_at=event.started_at,
+                completed_at=event.completed_at,
+                duration_ms=event.duration_ms,
+                source=event.source,
+            )
+        ]
+
+
 class ChatUsagePersistenceTests(unittest.IsolatedAsyncioTestCase):
     async def test_persists_usage_after_messages(self) -> None:
         conversation_repo = FakeConversationRepo(append_succeeds=True)
@@ -170,6 +194,21 @@ class ChatUsagePersistenceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(conversation_repo.appended_calls, 1)
         self.assertEqual(usage_repo.calls, 0)
         self.assertEqual(usage_repo.events, [])
+
+    async def test_persists_usage_from_delegated_runtime_agent_id(self) -> None:
+        conversation_repo = FakeConversationRepo(append_succeeds=True)
+        usage_repo = FakeUsageRepo()
+        service = ChatService(FakeAgentRepo(), conversation_repo, usage_repo, object())
+
+        with patch("app.services.chat_service.LLMProviderFactory.create", return_value=FakeProvider()), patch(
+            "app.services.chat_service.create_agent_runtime",
+            return_value=FakeDelegatedRuntime(),
+        ):
+            _ = [chunk async for chunk in service.stream_chat("user-1", "agent-1", ChatRequest(message="hi"))]
+
+        self.assertEqual(usage_repo.calls, 1)
+        self.assertEqual(len(usage_repo.events), 1)
+        self.assertEqual(usage_repo.events[0].agent_id, "delegate-inventory-1")
 
 
 if __name__ == "__main__":

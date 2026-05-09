@@ -4,12 +4,15 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { Plus, Trash2 } from "lucide-react";
 import { useSession } from "next-auth/react";
 import { useEffect, useMemo, useState } from "react";
-import { useFieldArray, useForm } from "react-hook-form";
+import { useFieldArray, useForm, useWatch } from "react-hook-form";
 
 import { useCompanies } from "@/entities/company/api/queries";
+import { useInventoryLocations, useStockLevels } from "@/entities/inventory/api/queries";
 import { PartnerSelect } from "@/entities/partner/ui/partner-select";
 import { ApiError } from "@/shared/api/errors";
 import { formatCurrency, formatPercent } from "@/shared/lib/format";
+import { useInvoiceFiltersStore } from "@/shared/store/invoice-filters-store";
+import { useNotificationStore } from "@/shared/store/notification-store";
 import { Button } from "@/shared/ui/button";
 import { EmptyState } from "@/shared/ui/empty-state";
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/shared/ui/form";
@@ -20,6 +23,7 @@ import { Textarea } from "@/shared/ui/textarea";
 import { useCreateInvoice } from "../api/mutations";
 import { createInvoiceSchema, type CreateInvoiceInput } from "../model/schema";
 import { calculateInvoicePreview } from "../model/totals";
+import { InvoiceItemInventoryLinkFields } from "./invoice-item-inventory-link-fields";
 
 export interface CreateInvoiceFormProps {
   onSuccess?: () => void;
@@ -34,6 +38,8 @@ const PAYMENT_METHODS: Array<{ label: string; value: CreateInvoiceInput["payment
   { label: "Card", value: "card" },
   { label: "Other", value: "other" },
 ];
+const EMPTY_ITEMS: CreateInvoiceInput["items"] = [];
+const STOCK_ISSUE_STATUSES = new Set<CreateInvoiceInput["status"]>(["sent", "paid", "overdue"]);
 
 function emptyRecipient(): NonNullable<CreateInvoiceInput["recipient"]> {
   return {
@@ -48,11 +54,21 @@ function emptyRecipient(): NonNullable<CreateInvoiceInput["recipient"]> {
   };
 }
 
+function parseDecimal(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 export function CreateInvoiceForm({ onSuccess, onCancel }: Readonly<CreateInvoiceFormProps>) {
   const { data: session } = useSession();
   const companies = useCompanies(session?.accessToken);
   const createInvoice = useCreateInvoice(session?.accessToken);
   const [error, setError] = useState<string | null>(null);
+  const [freeTextRows, setFreeTextRows] = useState<Record<string, boolean>>({});
+  const currentCompanyId = useInvoiceFiltersStore((state) => state.companyId);
+  const setCurrentCompanyId = useInvoiceFiltersStore((state) => state.setCompanyId);
+  const addNotification = useNotificationStore((state) => state.addNotification);
 
   const form = useForm<CreateInvoiceInput>({
     resolver: zodResolver(createInvoiceSchema),
@@ -73,7 +89,7 @@ export function CreateInvoiceForm({ onSuccess, onCancel }: Readonly<CreateInvoic
       compiler_name: null,
       original_label: "ОРИГИНАЛ",
       currency: "EUR",
-      status: "draft",
+      status: "sent",
       notes: null,
       items: [
         {
@@ -83,27 +99,57 @@ export function CreateInvoiceForm({ onSuccess, onCancel }: Readonly<CreateInvoic
           unit_price: "0",
           vat_rate: "0.20",
           category: null,
+          inventory_item_id: null,
+          inventory_location_id: null,
+          stock_quantity: null,
         },
       ],
     },
     mode: "onSubmit",
   });
 
-  const items = form.watch("items");
-  const selectedCompanyId = form.watch("company_id");
-  const selectedPartnerId = form.watch("partner_id");
-  const preview = useMemo(() => calculateInvoicePreview(items ?? []), [items]);
+  const watchedItems = useWatch({ control: form.control, name: "items" });
+  const items = watchedItems ?? EMPTY_ITEMS;
+  const selectedCompanyId = useWatch({ control: form.control, name: "company_id" }) ?? "";
+  const selectedPartnerId = useWatch({ control: form.control, name: "partner_id" }) ?? null;
+  const selectedCurrency = useWatch({ control: form.control, name: "currency" }) ?? "EUR";
+  const inventoryLocationsQuery = useInventoryLocations(selectedCompanyId, session?.accessToken);
+  const stockLevelsQuery = useStockLevels(session?.accessToken, {
+    company_id: selectedCompanyId,
+  });
+  const preview = useMemo(() => calculateInvoicePreview(items), [items]);
+  const stockByItemLocation = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const level of stockLevelsQuery.data?.levels ?? []) {
+      const available = parseDecimal(level.available_quantity);
+      if (available === null) continue;
+      map.set(`${level.item_id}:${level.location_id}`, available);
+    }
+    return map;
+  }, [stockLevelsQuery.data]);
+  const stockByItem = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const level of stockLevelsQuery.data?.levels ?? []) {
+      const available = parseDecimal(level.available_quantity);
+      if (available === null) continue;
+      map.set(level.item_id, (map.get(level.item_id) ?? 0) + available);
+    }
+    return map;
+  }, [stockLevelsQuery.data]);
 
-  const defaultCompanyId = useMemo(() => {
+  const initialCompanyId = useMemo(() => {
     const companyList = companies.data ?? [];
+    if (currentCompanyId && companyList.some((company) => company.id === currentCompanyId)) {
+      return currentCompanyId;
+    }
     return companyList.find((company) => company.is_default)?.id ?? companyList[0]?.id ?? "";
-  }, [companies.data]);
+  }, [companies.data, currentCompanyId]);
 
   useEffect(() => {
-    if (!form.getValues("company_id") && defaultCompanyId) {
-      form.setValue("company_id", defaultCompanyId, { shouldValidate: true });
+    if (!form.getValues("company_id") && initialCompanyId) {
+      form.setValue("company_id", initialCompanyId, { shouldValidate: true });
     }
-  }, [defaultCompanyId, form]);
+  }, [initialCompanyId, form]);
 
   const fieldArray = useFieldArray({
     control: form.control,
@@ -113,7 +159,19 @@ export function CreateInvoiceForm({ onSuccess, onCancel }: Readonly<CreateInvoic
   async function onSubmit(values: CreateInvoiceInput) {
     setError(null);
     try {
-      await createInvoice.mutateAsync(values);
+      const payload: CreateInvoiceInput = {
+        ...values,
+        items: values.items.map((item) => ({
+          ...item,
+          stock_quantity: item.inventory_item_id ? item.quantity : null,
+        })),
+      };
+      await createInvoice.mutateAsync(payload);
+      const linkedInventoryItems = payload.items.filter((item) => Boolean(item.inventory_item_id)).length;
+      if (linkedInventoryItems > 0 && STOCK_ISSUE_STATUSES.has(payload.status)) {
+        const noun = linkedInventoryItems === 1 ? "movement" : "movements";
+        addNotification(`Issued stock ${noun} created for ${linkedInventoryItems} invoice line(s).`, "success");
+      }
       form.reset({
         ...form.getValues(),
         partner_id: null,
@@ -127,9 +185,13 @@ export function CreateInvoiceForm({ onSuccess, onCancel }: Readonly<CreateInvoic
             unit_price: "0",
             vat_rate: "0.20",
             category: null,
+            inventory_item_id: null,
+            inventory_location_id: null,
+            stock_quantity: null,
           },
         ],
       });
+      setFreeTextRows({});
       onSuccess?.();
     } catch (e) {
       if (e instanceof ApiError) {
@@ -163,8 +225,16 @@ export function CreateInvoiceForm({ onSuccess, onCancel }: Readonly<CreateInvoic
                   value={field.value}
                   onValueChange={(value) => {
                     field.onChange(value);
+                    setCurrentCompanyId(value);
                     form.setValue("partner_id", null, { shouldValidate: true });
                     form.setValue("recipient", emptyRecipient(), { shouldValidate: false });
+                    const resetItems = (form.getValues("items") ?? []).map((item) => ({
+                      ...item,
+                      inventory_item_id: null,
+                      inventory_location_id: null,
+                      stock_quantity: null,
+                    }));
+                    form.setValue("items", resetItems, { shouldValidate: false });
                   }}
                   disabled={companies.isLoading}
                 >
@@ -494,6 +564,9 @@ export function CreateInvoiceForm({ onSuccess, onCancel }: Readonly<CreateInvoic
                   unit_price: "0",
                   vat_rate: "0.20",
                   category: null,
+                  inventory_item_id: null,
+                  inventory_location_id: null,
+                  stock_quantity: null,
                 })
               }
             >
@@ -503,117 +576,158 @@ export function CreateInvoiceForm({ onSuccess, onCancel }: Readonly<CreateInvoic
           </div>
 
           <div className="space-y-4">
-            {fieldArray.fields.map((f, index) => (
-              <div key={f.id} className="rounded-lg border p-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="grid flex-1 gap-4 sm:grid-cols-2">
-                    <FormField
-                      control={form.control}
-                      name={`items.${index}.description`}
-                      render={({ field }) => (
-                        <FormItem className="sm:col-span-2">
-                          <FormLabel>Description</FormLabel>
-                          <FormControl>
-                            <Input placeholder="Accounting consultation" autoComplete="off" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
+            {fieldArray.fields.map((f, index) => {
+              const item = items[index];
+              const linkedItemId = item?.inventory_item_id ?? null;
+              const linkedLocationId = item?.inventory_location_id ?? null;
+              const freeTextOnly = freeTextRows[f.id] ?? false;
+              const requestedQuantity = parseDecimal(item?.quantity);
+              const availableForLocation =
+                linkedItemId && linkedLocationId
+                  ? stockByItemLocation.get(`${linkedItemId}:${linkedLocationId}`) ?? null
+                  : null;
+              const availableQuantity = linkedItemId
+                ? (availableForLocation ?? stockByItem.get(linkedItemId) ?? 0)
+                : null;
+              const lowStockWarning =
+                linkedItemId !== null &&
+                requestedQuantity !== null &&
+                !stockLevelsQuery.isLoading &&
+                availableQuantity !== null &&
+                availableQuantity < requestedQuantity;
 
-                    <FormField
-                      control={form.control}
-                      name={`items.${index}.quantity`}
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Quantity</FormLabel>
-                          <FormControl>
-                            <Input inputMode="decimal" autoComplete="off" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
+              return (
+                <div key={f.id} className="rounded-lg border p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="grid flex-1 gap-4 sm:grid-cols-2">
+                      <InvoiceItemInventoryLinkFields
+                        form={form}
+                        index={index}
+                        rowId={f.id}
+                        token={session?.accessToken}
+                        selectedCompanyId={selectedCompanyId}
+                        freeTextOnly={freeTextOnly}
+                        onFreeTextOnlyChange={(next) =>
+                          setFreeTextRows((current) => ({ ...current, [f.id]: next }))
+                        }
+                        linkedItemId={linkedItemId}
+                        inventoryLocations={inventoryLocationsQuery.data?.locations ?? []}
+                        inventoryLocationsLoading={inventoryLocationsQuery.isLoading}
+                        lowStockWarning={lowStockWarning}
+                        availableQuantity={availableQuantity}
+                      />
 
-                    <FormField
-                      control={form.control}
-                      name={`items.${index}.unit_label`}
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Unit</FormLabel>
-                          <FormControl>
-                            <Input placeholder="бр." autoComplete="off" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
+                      <FormField
+                        control={form.control}
+                        name={`items.${index}.quantity`}
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Quantity</FormLabel>
+                            <FormControl>
+                              <Input inputMode="decimal" autoComplete="off" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
 
-                    <FormField
-                      control={form.control}
-                      name={`items.${index}.unit_price`}
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Unit price</FormLabel>
-                          <FormControl>
-                            <Input inputMode="decimal" autoComplete="off" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
+                      <FormField
+                        control={form.control}
+                        name={`items.${index}.unit_label`}
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Unit</FormLabel>
+                            <FormControl>
+                              <Input placeholder="бр." autoComplete="off" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
 
-                    <FormField
-                      control={form.control}
-                      name={`items.${index}.vat_rate`}
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>VAT rate</FormLabel>
-                          <FormControl>
-                            <Input inputMode="decimal" autoComplete="off" {...field} />
-                          </FormControl>
-                          <p className="text-xs text-muted-foreground">
-                            Example: <span className="font-mono">0.20</span> ({formatPercent(field.value)})
-                          </p>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
+                      <FormField
+                        control={form.control}
+                        name={`items.${index}.unit_price`}
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Unit price</FormLabel>
+                            <FormControl>
+                              <Input inputMode="decimal" autoComplete="off" {...field} />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
 
-                    <FormField
-                      control={form.control}
-                      name={`items.${index}.category`}
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Category</FormLabel>
-                          <FormControl>
-                            <Input
-                              placeholder="services"
-                              autoComplete="off"
-                              value={field.value ?? ""}
-                              onChange={(e) => field.onChange(e.target.value || null)}
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
+                      <FormField
+                        control={form.control}
+                        name={`items.${index}.vat_rate`}
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>VAT rate</FormLabel>
+                            <FormControl>
+                              <Input inputMode="decimal" autoComplete="off" {...field} />
+                            </FormControl>
+                            <p className="text-xs text-muted-foreground">
+                              Example: <span className="font-mono">0.20</span> ({formatPercent(field.value)})
+                            </p>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name={`items.${index}.category`}
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel>Category</FormLabel>
+                            <FormControl>
+                              <Input
+                                placeholder="services"
+                                autoComplete="off"
+                                value={field.value ?? ""}
+                                onChange={(e) => field.onChange(e.target.value || null)}
+                              />
+                            </FormControl>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="mt-7"
+                      onClick={() => fieldArray.remove(index)}
+                      disabled={fieldArray.fields.length <= 1}
+                      aria-label="Remove item"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
                   </div>
-
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="mt-7"
-                    onClick={() => fieldArray.remove(index)}
-                    disabled={fieldArray.fields.length <= 1}
-                    aria-label="Remove item"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
                 </div>
-              </div>
-            ))}
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="rounded-lg border bg-muted/30 p-4">
+          <div className="grid gap-2 text-sm sm:grid-cols-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-muted-foreground">Subtotal</span>
+              <span className="font-medium">{formatCurrency(preview.subtotal, selectedCurrency)}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-muted-foreground">VAT</span>
+              <span className="font-medium">{formatCurrency(preview.vatTotal, selectedCurrency)}</span>
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-muted-foreground">Total</span>
+              <span className="font-medium">{formatCurrency(preview.total, selectedCurrency)}</span>
+            </div>
           </div>
         </div>
 
@@ -771,23 +885,6 @@ export function CreateInvoiceForm({ onSuccess, onCancel }: Readonly<CreateInvoic
               </FormItem>
             )}
           />
-        </div>
-
-        <div className="rounded-lg border bg-muted/30 p-4">
-          <div className="grid gap-2 text-sm sm:grid-cols-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-muted-foreground">Subtotal</span>
-              <span className="font-medium">{formatCurrency(preview.subtotal, form.getValues("currency"))}</span>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-muted-foreground">VAT</span>
-              <span className="font-medium">{formatCurrency(preview.vatTotal, form.getValues("currency"))}</span>
-            </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-muted-foreground">Total</span>
-              <span className="font-medium">{formatCurrency(preview.total, form.getValues("currency"))}</span>
-            </div>
-          </div>
         </div>
 
         {error ? <p className="text-sm text-destructive">{error}</p> : null}

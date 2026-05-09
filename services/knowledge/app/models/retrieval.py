@@ -11,6 +11,7 @@ class RetrievalRequest(BaseModel):
     company_id: str | None = None
     top_k: int = Field(default=5, ge=1, le=20)
     include_global_tax: bool = True
+    include_global_inventory: bool = False
     include_user_documents: bool = True
     allow_legacy_all_company_documents: bool = False
     filters: dict[str, str | int | float | bool] = Field(default_factory=dict)

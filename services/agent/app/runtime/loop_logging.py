@@ -3,19 +3,27 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import json
 import logging
+import re
 import time
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from app.config import settings
-from app.models.agent import AgentInDB
+from app.models.shared.agent import AgentInDB
 from app.runtime.usage import LLMUsageEvent, TokenUsage, extract_token_usage
 
 logger = logging.getLogger(__name__)
 
 _MAX_LOG_CHARS = 500
+_MAX_TOOL_TRACE_CHARS = 200
+_MAX_SANITIZE_DEPTH = 3
+_MAX_SANITIZE_ITEMS = 20
+_REDACTED = "[REDACTED]"
+_SECRET_KEY_PARTS = ("token", "secret", "password", "api_key", "authorization", "cookie", "jwt")
+_SENSITIVE_TEXT_PARTS = ("bearer ", "eyj")
 
 
 def stringify_chunk_content(content: str | list[str | dict[str, Any]] | None) -> str:
@@ -47,6 +55,75 @@ def preview_log_value(value: Any) -> str:
     else:
         text = repr(value)
     return text if len(text) <= _MAX_LOG_CHARS else f"{text[:_MAX_LOG_CHARS]}..."
+
+
+def _is_secret_key(key: str) -> bool:
+    lowered = key.casefold()
+    return any(part in lowered for part in _SECRET_KEY_PARTS)
+
+
+def _sanitize_text(value: str) -> str:
+    lowered = value.casefold()
+    if any(part in lowered for part in _SENSITIVE_TEXT_PARTS):
+        return _REDACTED
+    return value
+
+
+def _sanitize_for_trace(value: Any, *, depth: int = 0) -> Any:
+    if depth >= _MAX_SANITIZE_DEPTH:
+        return "[TRUNCATED]"
+    if isinstance(value, dict):
+        sanitized: dict[str, Any] = {}
+        for idx, (key, item) in enumerate(value.items()):
+            if idx >= _MAX_SANITIZE_ITEMS:
+                sanitized["..."] = f"+{len(value) - _MAX_SANITIZE_ITEMS} more keys"
+                break
+            if _is_secret_key(str(key)):
+                sanitized[str(key)] = _REDACTED
+            else:
+                sanitized[str(key)] = _sanitize_for_trace(item, depth=depth + 1)
+        return sanitized
+    if isinstance(value, list):
+        items = [_sanitize_for_trace(item, depth=depth + 1) for item in value[:_MAX_SANITIZE_ITEMS]]
+        if len(value) > _MAX_SANITIZE_ITEMS:
+            items.append(f"... +{len(value) - _MAX_SANITIZE_ITEMS} more items")
+        return items
+    if isinstance(value, str):
+        return _sanitize_text(value)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    return repr(value)
+
+
+def _preview_tool_args(value: Any) -> str:
+    sanitized = _sanitize_for_trace(value)
+    try:
+        text = json.dumps(sanitized, ensure_ascii=False, separators=(",", ":"))
+    except TypeError:
+        text = repr(sanitized)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) <= _MAX_TOOL_TRACE_CHARS:
+        return text
+    return f"{text[:_MAX_TOOL_TRACE_CHARS]}..."
+
+
+def sanitize_tool_trace(event: dict[str, Any]) -> dict[str, Any]:
+    phase = str(event.get("event") or "")
+    data = event_data(event)
+    output = data.get("output")
+    output_size = len(str(output).encode("utf-8")) if output is not None else 0
+    duration = data.get("duration_ms")
+    if not isinstance(duration, (int, float)):
+        duration = None
+    status = "error" if phase == "on_tool_error" else ("started" if phase == "on_tool_start" else "ok")
+    return {
+        "tool_name": str(event.get("name") or "unknown_tool"),
+        "phase": phase,
+        "args_preview": _preview_tool_args(data.get("input")),
+        "duration_ms": duration,
+        "status": status,
+        "output_bytes": output_size,
+    }
 
 
 @dataclass(slots=True)

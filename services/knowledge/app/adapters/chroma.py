@@ -53,6 +53,9 @@ class ChromaAdapter(VectorStore):
     def global_tax_collection_name(self) -> str:
         return "global_tax"
 
+    def global_inventory_collection_name(self) -> str:
+        return "global_inventory"
+
     async def add_chunks(
         self,
         collection_name: str,

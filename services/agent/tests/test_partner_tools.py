@@ -11,8 +11,10 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.clients.business import BusinessClientError
-from app.models.partner import PartnerResponse
+from app.models.financial.partner import PartnerResponse
 from app.tools.financial import build_partner_tools
+from app.tools.financial.operations import build_partner_tools as build_partner_tools_ops
+from app.tools.financial.partner_tools import build_partner_tools as build_partner_tools_split
 
 
 def _partner(registration_number: str = "123456789") -> PartnerResponse:
@@ -59,6 +61,10 @@ class FakeBusinessClient:
 
 
 class PartnerToolTests(unittest.IsolatedAsyncioTestCase):
+    def test_partner_builder_exports_resolve_to_split_module(self) -> None:
+        self.assertIs(build_partner_tools, build_partner_tools_split)
+        self.assertIs(build_partner_tools, build_partner_tools_ops)
+
     async def test_create_partner_resolves_existing_partner_after_duplicate_key(self) -> None:
         business_client = FakeBusinessClient()
         context = SimpleNamespace(business_client=business_client)

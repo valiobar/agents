@@ -4,25 +4,25 @@
 
 ```mermaid
 graph TD
-    Gateway["API Gateway"] -->|"HTTP /companies /partners /invoices /expenses"| Business["Business Service"]
-    Agent["Agent Service"] -->|"BusinessClient: company validation, partner/invoice/expense tools, summaries"| Business
+    Gateway["API Gateway"] -->|"HTTP /companies /partners /invoices /expenses /inventory/*"| Business["Business Service"]
+    Agent["Agent Service"] -->|"BusinessClient: company validation, Accountant + Inventory agent tools, summaries"| Business
     Knowledge["Knowledge Base Service"] -->|"company validation"| Business
 
     subgraph internal ["Business Service"]
-        Routes["routes/"]
-        Services["services/"]
-        Repos["repositories/"]
-        Models["models/"]
+        Routes["company|partner|financial|inventory /routes/"]
+        DomainServices["company|partner|financial|inventory /services/"]
+        DomainRepos["company|partner|financial|inventory /repositories/"]
+        DomainModels["company|partner|financial|inventory /models.py"]
         Utils["utils/db.py"]
     end
 
     Compose["docker-compose.yml"] --> Business
     Business --> Routes
-    Routes --> Services
-    Services --> Repos
-    Services --> Models
-    Repos --> Models
-    Repos --> Mongo[("MongoDB")]
+    Routes --> DomainServices
+    DomainServices --> DomainRepos
+    DomainServices --> DomainModels
+    DomainRepos --> DomainModels
+    DomainRepos --> Mongo[("MongoDB")]
     Utils --> Mongo
     Gateway --> Redis[("Redis rate limiting")]
 ```
@@ -33,10 +33,10 @@ Business has one runtime infrastructure dependency: MongoDB. It does not connect
 
 | Dependency | Type | Status | Purpose |
 |------------|------|--------|---------|
-| API Gateway | inbound HTTP | Implemented | Public access to `/companies`, `/partners`, `/invoices`, and `/expenses` after JWT validation |
-| Agent Service | internal HTTP caller | Implemented | Uses Business for company validation and Accountant financial/partner tools |
+| API Gateway | inbound HTTP | Implemented | Public access to `/companies`, `/partners`, `/invoices`, `/expenses`, and `/inventory/*` after JWT validation |
+| Agent Service | internal HTTP caller | Implemented | Uses Business for company validation, Accountant financial/partner tools, and Inventory Agent item/stock/import tools |
 | Knowledge Base Service | internal HTTP caller | Implemented | Uses Business to validate `company_id` ownership for company-scoped documents |
-| MongoDB | database | Implemented | Stores `companies`, `partners`, `invoices`, `expenses`, and `counters` |
+| MongoDB | database | Implemented | Stores `companies`, `partners`, `invoices`, `expenses`, `counters`, `inventory_items`, `inventory_locations`, `stock_movements`, and `inventory_import_previews` |
 | Redis | indirect gateway dependency | Implemented outside Business | Gateway rate limiting only; Business does not use Redis directly |
 | Auth Service | indirect gateway dependency | Implemented outside Business | Gateway validates JWTs before proxying; Business only receives `x-user-id` |
 | ChromaDB | none | Not used | Business never reads or writes vector data |
@@ -51,6 +51,10 @@ Business has one runtime infrastructure dependency: MongoDB. It does not connect
 | `invoices` | Company-scoped invoices with calculated totals and party snapshots |
 | `expenses` | User-scoped expenses with deductible calculations |
 | `counters` | Atomic invoice number sequences by user, company, and year |
+| `inventory_items` | Company-scoped catalog with SKU/barcode/alias search fields |
+| `inventory_locations` | Company-scoped stock locations and default-location marker |
+| `stock_movements` | Append-only stock movement ledger |
+| `inventory_import_previews` | Draft/confirmed/cancelled import review state |
 
 Other service-owned collections:
 
@@ -63,12 +67,18 @@ Business must not read or write those collections directly.
 ## Internal Dependency Direction
 
 ```text
-routes -> services -> repositories -> models
-                    \-> repositories/financial_utils.py
-                    \-> utils/db.py
+routes -> <domain>/services -> <domain>/repositories -> <domain>/models.py
+                                          \-> financial/repositories/financial_utils.py
+                                          \-> utils/db.py
 ```
 
 Routes depend on services through FastAPI dependencies. Services depend on repositories and Pydantic models. Repositories depend on MongoDB and serialization helpers. Models do not import services or repositories.
+
+Internal cross-domain dependencies are owned by Business:
+
+- `financial/services/invoice_service.py` depends on `company`, `partner`, and `inventory` domains.
+- `inventory/services/*` depends on `company/services/company_service.py` for ownership guards.
+- Other services must use HTTP contracts and cannot import these internal modules.
 
 ## Startup Dependencies
 
@@ -120,6 +130,20 @@ Indexes created by `services/business/app/utils/db.py`:
 | `expenses` | `(user_id, expense_date desc)` | Date-range expense lists and summaries |
 | `expenses` | `(user_id, counterparty)` | Counterparty filters |
 | `expenses` | `(user_id, deductible)` | Deductibility filters |
+| `inventory_items` | `(user_id, company_id, sku)` unique | Enforce unique SKU per company |
+| `inventory_items` | `(user_id, company_id, barcode)` sparse | Fast barcode lookup |
+| `inventory_items` | `(user_id, company_id, is_active, name)` | Active-item listing |
+| `inventory_items` | `(user_id, company_id, category)` | Category filtering |
+| `inventory_items` | `(user_id, company_id, aliases)` | Alias lookup |
+| `inventory_items` | text index on `name, description, category, aliases, search_text` | Inventory text search |
+| `inventory_locations` | `(user_id, company_id, name)` | Location list order/filtering |
+| `inventory_locations` | `(user_id, company_id, is_default)` | Default-location management |
+| `stock_movements` | `(user_id, company_id, item_id, occurred_at desc)` | Item movement history |
+| `stock_movements` | `(user_id, company_id, location_id)` | Location filtering |
+| `stock_movements` | `(user_id, company_id, movement_type)` | Movement-type filtering |
+| `stock_movements` | `(user_id, source_type, source_id, source_line_id)` unique sparse | Idempotent source-backed movement writes |
+| `inventory_import_previews` | `(user_id, company_id, status, created_at desc)` | Preview status lists |
+| `inventory_import_previews` | `(user_id, document_id)` sparse | Document-linked preview lookup |
 
 The `counters` collection uses MongoDB `_id` uniqueness for atomic invoice sequence keys.
 
@@ -134,6 +158,7 @@ Gateway maps these prefixes to `BUSINESS_SERVICE_URL`:
 /partners
 /invoices
 /expenses
+/inventory
 ```
 
 Gateway strips hop-by-hop request headers, injects `x-user-id` after JWT validation, and forwards the request body/query unchanged.
@@ -143,16 +168,30 @@ Gateway strips hop-by-hop request headers, injects `x-user-id` after JWT validat
 Agent uses a long-lived `httpx.AsyncClient` wrapped by `BusinessClient`. It forwards `x-user-id` and calls:
 
 ```text
-GET  /companies
-GET  /companies/{company_id}/exists
-GET  /partners
-GET  /partners/{partner_id}
-POST /partners
-GET  /invoices
-POST /invoices
-GET  /expenses
-POST /expenses
-POST /financial-summary
+GET   /companies
+GET   /companies/{company_id}/exists
+GET   /partners
+GET   /partners/{partner_id}
+POST  /partners
+GET   /invoices
+POST  /invoices
+GET   /expenses
+POST  /expenses
+POST  /financial-summary
+GET   /inventory/items
+GET   /inventory/items/{item_id}
+POST  /inventory/items
+PATCH /inventory/items/{item_id}
+GET   /inventory/locations
+POST  /inventory/movements
+GET   /inventory/movements
+GET   /inventory/levels
+POST  /inventory/search
+GET   /inventory/import-previews
+GET   /inventory/import-previews/{preview_id}
+PATCH /inventory/import-previews/{preview_id}
+POST  /inventory/import-previews/{preview_id}/confirm
+POST  /inventory/import-previews/{preview_id}/cancel
 ```
 
 Agent treats Business HTTP failures as `BusinessClientError`; chat tools return user-safe error messages instead of exposing transport details.

@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Query
 
 from app.dependencies import get_conversation_service, get_user_id
-from app.models.conversation import ConversationResponse
+from app.models.shared.conversation import ConversationResponse
 from app.services.conversation_service import ConversationService
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])

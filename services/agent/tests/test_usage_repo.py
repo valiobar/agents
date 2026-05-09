@@ -10,7 +10,7 @@ from pymongo.errors import BulkWriteError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.models.usage import UsageEventCreate
+from app.models.shared.usage import UsageEventCreate
 from app.repositories.usage_repo import UsageRepository
 
 

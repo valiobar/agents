@@ -104,7 +104,7 @@ Each row is a service. Columns show what it depends on. Read as: *"Row service r
 | **API Gateway** | — | **Rate limiting** | — | Route target | Route target | Route target | Route target | Route target | — |
 | **Auth Service** | **users** | — | — | — | — | — | — | — | — |
 | **Agent Service** | **agents, conversations** | — | — | — | — | **financial + partner tools, company validation** | **RAG retrieval** | — | **OpenAI / Anthropic / DeepSeek / Ollama** |
-| **Business Service** | **companies, partners, invoices, expenses, counters** | — | — | — | — | — | — | — | — |
+| **Business Service** | **companies, partners, invoices, expenses, inventory, counters** | — | — | — | — | — | — | — | — |
 | **Knowledge Base** | **documents** (metadata) | — | **embeddings + chunks** | — | — | **company validation target** | — | — | **OpenAI** (embedding) |
 | **Orchestrator** | — | **Redis Streams** (Phase 2) | — | — | Task dispatch (Phase 2) | — | — | — | — |
 | **Frontend** | — | — | — | — | — | — | — | — | — |
@@ -242,7 +242,7 @@ graph LR
 |------|-----|---------|------|---------|
 | Gateway | Auth | HTTP | `/auth/*` | Proxy registration, login, OAuth, profile requests |
 | Gateway | Agent | HTTP | `/agents/*`, `/conversations/*` | Proxy agent CRUD, conversation reads, and chat (SSE) |
-| Gateway | Business | HTTP | `/companies/*`, `/partners/*`, `/invoices/*`, `/expenses/*` | Proxy company, partner, invoice, and expense APIs |
+| Gateway | Business | HTTP | `/companies/*`, `/partners/*`, `/invoices/*`, `/expenses/*`, `/inventory/*` | Proxy company, partner, invoice, expense, and inventory APIs |
 | Gateway | Knowledge | HTTP | `/documents`, `/retrieve` | Proxy document upload, lifecycle, and retrieval |
 | Gateway | Orchestrator | HTTP | `/orchestrator/*` | Proxy workflow management (Phase 2) |
 | Agent | Business | HTTP | `/companies/{id}/exists`, `/partners`, `/invoices`, `/expenses`, `/financial-summary` | Validate company assignment and execute financial/partner tools |

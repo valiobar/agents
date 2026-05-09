@@ -14,6 +14,9 @@ async def connect_db() -> None:
     await db["agents"].create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
     await db["agents"].create_index([("user_id", ASCENDING), ("name", ASCENDING)])
     await db["agents"].create_index(
+        [("user_id", ASCENDING), ("agent_type", ASCENDING), ("company_id", ASCENDING), ("created_at", DESCENDING)]
+    )
+    await db["agents"].create_index(
         [("user_id", ASCENDING), ("company_id", ASCENDING), ("created_at", DESCENDING)]
     )
     await db["conversations"].create_index(

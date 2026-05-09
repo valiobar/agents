@@ -14,9 +14,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.dependencies import get_receipt_service
 from app.main import app
-from app.models.agent import AgentConfig, AgentInDB
-from app.models.document import DocumentResponse
-from app.models.receipt import ExpenseDraft, ExpenseDraftResponse
+from app.models.shared.agent import AgentConfig, AgentInDB
+from app.models.shared.document import DocumentResponse
+from app.models.financial.receipt import ExpenseDraft, ExpenseDraftResponse
 from app.services.receipt_service import ReceiptService
 
 

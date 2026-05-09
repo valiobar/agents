@@ -1,5 +1,6 @@
 import type { Message } from "@/entities/conversation/model/types";
 import type { ExpenseDraft } from "@/entities/expense/model/types";
+import type { ToolTracePayload } from "@/shared/api/sse";
 
 export interface ChatState {
   messages: Message[];
@@ -9,6 +10,7 @@ export interface ChatState {
   expenseDraftStatus: "idle" | "loading" | "ready" | "confirming" | "confirmed" | "error";
   expenseDraft: ExpenseDraft | null;
   expenseDraftError: string | null;
+  toolTraces: ToolTracePayload[];
 }
 
 export type ChatAction =
@@ -21,8 +23,13 @@ export type ChatAction =
   | { type: "EXPENSE_DRAFT_LOADING" }
   | { type: "EXPENSE_DRAFT_READY"; payload: ExpenseDraft }
   | { type: "EXPENSE_DRAFT_ERROR"; payload: string }
+  | { type: "TOOL_TRACE"; payload: ToolTracePayload }
   | { type: "EXPENSE_DRAFT_CLEAR" }
   | { type: "EXPENSE_CONFIRMING" }
+  | {
+      type: "APPEND_ASSISTANT_MESSAGE";
+      payload: { content: string; metadata?: Record<string, unknown>; createdAt?: string };
+    }
   | {
       type: "EXPENSE_CONFIRMATION_SUCCEEDED";
       payload: { content: string; createdAt?: string };
@@ -40,6 +47,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         expenseDraftStatus: "idle",
         expenseDraft: null,
         expenseDraftError: null,
+        toolTraces: [],
       };
     case "RESET":
       return {
@@ -50,6 +58,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         expenseDraftStatus: "idle",
         expenseDraft: null,
         expenseDraftError: null,
+        toolTraces: [],
       };
     case "SEND_MESSAGE": {
       const clearConfirmedDraft = state.expenseDraftStatus === "confirmed";
@@ -77,6 +86,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       };
     }
     case "STREAM_TOKEN":
+      console.log("STREAM_TOKEN", action.payload);
       return {
         ...state,
         streamingContent: state.streamingContent + action.payload,
@@ -132,12 +142,30 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         expenseDraft: null,
         expenseDraftError: action.payload,
       };
+    case "TOOL_TRACE":
+      return {
+        ...state,
+        toolTraces: [...state.toolTraces, action.payload].slice(-50),
+      };
     case "EXPENSE_DRAFT_CLEAR":
       return {
         ...state,
         expenseDraftStatus: "idle",
         expenseDraft: null,
         expenseDraftError: null,
+      };
+    case "APPEND_ASSISTANT_MESSAGE":
+      return {
+        ...state,
+        messages: [
+          ...state.messages,
+          {
+            role: "assistant",
+            content: action.payload.content,
+            created_at: action.payload.createdAt ?? new Date().toISOString(),
+            metadata: action.payload.metadata ?? {},
+          },
+        ],
       };
     case "EXPENSE_CONFIRMATION_SUCCEEDED":
       return {

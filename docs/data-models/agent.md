@@ -14,7 +14,7 @@ Stores user-created agent instances and provider/runtime configuration.
 | `user_id` | string | Yes | Gateway-authenticated owner id. Every query filters by this field. |
 | `name` | string | Yes | User-visible agent name, 1-120 characters. |
 | `description` | string or null | No | Optional user-visible description, max 1000 characters. |
-| `agent_type` | string | Yes | Phase 3 supports only `accountant`. |
+| `agent_type` | string | Yes | Runtime type: `accountant`, `inventory`, or `router`. |
 | `company_id` | string or null | No | Optional Business-owned company assignment. Financial/partner tools require this for writes. |
 | `config` | object | Yes | Provider, model, temperature, and optional system prompt override. |
 | `config.provider` | string | Yes | `openai`, `anthropic`, `deepseek`, or `ollama`. |
@@ -50,8 +50,11 @@ Indexes created on startup:
 | Index | Purpose |
 |-------|---------|
 | `(user_id ASC, created_at DESC)` | List a user's agents newest first. |
+| `(user_id ASC, agent_type ASC, company_id ASC, created_at DESC)` | Resolve same-user, same-company specialist runtimes for router delegation. |
 | `(user_id ASC, company_id ASC, created_at DESC)` | Filter a user's agents by company. |
 | `(user_id ASC, name ASC)` | Support user-scoped name filtering/sorting and future uniqueness checks. |
+
+Router-linked delegate lookup can read `parent_agent_id` and `delegate_role` fields if they exist on stored documents, but those fields are not part of the public `AgentResponse` schema yet. Normal list responses currently return all documents that match `user_id` and optional `company_id`; there is no public `visibility` flag or delegate-hiding filter in the current model.
 
 ## `conversations` Collection
 
@@ -182,3 +185,12 @@ SSE `ChatEvent` data is serialized as `event: <name>` plus JSON `data`, for exam
 event: token
 data: {"content":"20% VAT on 100 is 20."}
 ```
+
+Router chats may also emit non-persisted route metadata after message and usage persistence and before `done`:
+
+```text
+event: route
+data: {"predicted_route":"inventory","executed_route":"inventory","reason":"stock question","confidence":0.95,"company_id":"665f1f77c9e0f7a8093bb701","company_scope":"assigned"}
+```
+
+`ChatEvent.data` allows primitive JSON values only, so router route metadata is intentionally flat.

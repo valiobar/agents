@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.models.companybook import CompanyBookCompanyDetail, CompanyBookPartnerMappingError
+from app.models.financial.companybook import CompanyBookCompanyDetail, CompanyBookPartnerMappingError
 
 
 class CompanyBookMappingTests(unittest.TestCase):

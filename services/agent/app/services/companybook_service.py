@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 
-from app.models.companybook import CompanyBookCompanyDetail, CompanyBookSearchResponse
+from app.models.financial.companybook import CompanyBookCompanyDetail, CompanyBookSearchResponse
 
 
 class CompanyBookError(Exception):
