@@ -11,7 +11,7 @@ The agent delegates shared execution, streaming, conversation history conversion
 - Answer tax, accounting, and finance questions from retrieved regulatory or uploaded company-document context.
 - Query invoices by status, dates, partner, amount, category, or company scope.
 - Query expenses by category, dates, counterparty, amount, or deductibility.
-- Produce financial summaries with source-currency totals and BGN-converted totals for Bulgarian regulation checks.
+- Produce financial summaries with source-currency totals and EUR-denominated top-level totals for cross-currency comparisons and EUR threshold checks.
 - Draft and create invoices after partner resolution and explicit user confirmation.
 - Record expenses only after explicit user confirmation.
 - Resolve companies when the agent is not bound to a single company.
@@ -27,7 +27,7 @@ The agent delegates shared execution, streaming, conversation history conversion
 | RAG over tax and company documents | Supported | Uses Knowledge Base `/retrieve` through `rag_search`. |
 | Invoice queries | Supported | Uses Business Service invoice listing APIs. |
 | Expense queries | Supported | Uses Business Service expense listing APIs. |
-| Financial summaries | Supported | Includes raw totals by currency and BGN-converted top-level totals. |
+| Financial summaries | Supported | Includes raw totals by currency and EUR-denominated top-level totals plus `exchange_rates_to_eur`. |
 | Invoice creation | Supported with confirmation | First call returns a draft unless `confirmed=true`. |
 | Expense recording | Supported with confirmation | Tool refuses to persist until `confirmed=true`. |
 | Partner management | Supported | Search, resolve, get, and create local partners. |
@@ -67,7 +67,10 @@ The system prompt is generated on every run by `AccountantAgent.get_system_promp
 - Call `rag_search` at most once per single user question unless the user explicitly asks for a different source or topic.
 - Use structured financial tools for invoices, expenses, and summaries.
 - Report ordinary balances, income, expenses, invoices, and cash-flow amounts in source currencies from `totals_by_currency`.
-- Use BGN-converted top-level totals only for Bulgarian tax thresholds or BGN-denominated regulation checks, and mention conversion when source records are not BGN.
+- Use EUR top-level totals (`currency="EUR"`) only for cross-currency comparison or EUR-denominated threshold checks, and mention conversion when source records are not EUR.
+- Treat list/search tool responses as envelopes (`total_count`, `returned_count`, `offset`, `limit`, `truncated`, `next_offset`, `items`).
+- When `truncated=true`, do not claim completeness; use `next_offset` only when the user asks to continue or broaden the search.
+- For partner resolution (`resolve_partner_by_name`), surface candidate `match_type`, `score`, and `match_reasons` instead of silently choosing weak matches.
 - Use `calculator` for arithmetic and never compare threshold numbers without checking currency.
 - Use `date_helper` for current or relative dates; never guess the current date.
 - Before invoice creation, call `create_invoice` with `confirmed=false`, present the draft, and ask for explicit user confirmation.
@@ -180,7 +183,7 @@ The runtime must not import repositories or database clients for downstream doma
 - CompanyBook imports must ask the user to choose when multiple registry matches are possible.
 - Incomplete CompanyBook data should result in a focused request for missing partner fields, not broad re-entry.
 - RAG retrieval is intentionally limited to reduce repeated near-identical search loops.
-- Currency comparisons must use source currency for ordinary reporting and BGN conversion only for BGN-denominated regulation checks.
+- Currency comparisons must use source currency for ordinary reporting and EUR top-level totals only for cross-currency/EUR-denominated checks.
 
 ## Failure Modes
 
@@ -203,7 +206,7 @@ Manual verification scenarios:
 
 - Ask a tax question and confirm the agent uses RAG context once before answering.
 - Ask for an invoice summary and verify source currency is preserved.
-- Ask for a BGN threshold check from EUR records and verify the assistant mentions conversion.
+- Ask for an EUR threshold check from non-EUR records and verify the assistant mentions conversion.
 - Create an invoice and confirm the first tool response is a draft, with persistence only after explicit confirmation.
 - Record an expense and confirm persistence is blocked until confirmation.
 - Use an unassigned agent with multiple companies and verify company resolution happens before finance tools.

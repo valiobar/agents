@@ -21,6 +21,9 @@ async def ensure_indexes() -> None:
     )
     await db["invoices"].create_index([("user_id", ASCENDING), ("issue_date", DESCENDING)])
     await db["invoices"].create_index([("user_id", ASCENDING), ("counterparty", ASCENDING)])
+    await db["invoices"].create_index(
+        [("user_id", ASCENDING), ("company_id", ASCENDING), ("counterparty_normalized", ASCENDING)]
+    )
     await db["invoices"].create_index([("user_id", ASCENDING), ("items.category", ASCENDING)])
     try:
         await db["invoices"].drop_index("user_id_1_invoice_number_1")
@@ -50,18 +53,53 @@ async def ensure_indexes() -> None:
         [("user_id", ASCENDING), ("category", ASCENDING), ("expense_date", DESCENDING)]
     )
     await db["expenses"].create_index([("user_id", ASCENDING), ("expense_date", DESCENDING)])
+    await db["expenses"].create_index(
+        [("user_id", ASCENDING), ("company_id", ASCENDING), ("expense_date", DESCENDING)]
+    )
+    await db["expenses"].create_index(
+        [
+            ("user_id", ASCENDING),
+            ("company_id", ASCENDING),
+            ("category", ASCENDING),
+            ("expense_date", DESCENDING),
+        ]
+    )
+    await db["expenses"].create_index(
+        [("user_id", ASCENDING), ("company_id", ASCENDING), ("partner_id", ASCENDING)]
+    )
     await db["expenses"].create_index([("user_id", ASCENDING), ("counterparty", ASCENDING)])
+    await db["expenses"].create_index([("user_id", ASCENDING), ("counterparty_normalized", ASCENDING)])
+    await db["expenses"].create_index(
+        [("user_id", ASCENDING), ("company_id", ASCENDING), ("counterparty_normalized", ASCENDING)]
+    )
     await db["expenses"].create_index([("user_id", ASCENDING), ("deductible", ASCENDING)])
 
     await db["companies"].create_index([("user_id", ASCENDING), ("created_at", DESCENDING)])
+    await db["companies"].create_index([("user_id", ASCENDING), ("name", ASCENDING)])
+    await db["companies"].create_index([("user_id", ASCENDING), ("name_normalized", ASCENDING)])
     await db["companies"].create_index([("user_id", ASCENDING), ("registration_number", ASCENDING)], unique=True)
+    await db["companies"].create_index(
+        [("user_id", ASCENDING), ("registration_number_normalized", ASCENDING)],
+        unique=True,
+    )
     await db["companies"].create_index([("user_id", ASCENDING), ("is_default", ASCENDING)])
 
     await db["partners"].create_index([("user_id", ASCENDING), ("company_id", ASCENDING), ("name", ASCENDING)])
+    await db["partners"].create_index(
+        [("user_id", ASCENDING), ("company_id", ASCENDING), ("name_normalized", ASCENDING)]
+    )
     await db["partners"].create_index([("user_id", ASCENDING), ("company_id", ASCENDING), ("kind", ASCENDING)])
     await db["partners"].create_index(
         [("user_id", ASCENDING), ("company_id", ASCENDING), ("registration_number", ASCENDING)],
         unique=True,
+    )
+    await db["partners"].create_index(
+        [("user_id", ASCENDING), ("company_id", ASCENDING), ("registration_number_normalized", ASCENDING)],
+        unique=True,
+    )
+    await db["partners"].create_index(
+        [("user_id", ASCENDING), ("company_id", ASCENDING), ("vat_number_normalized", ASCENDING)],
+        sparse=True,
     )
 
     await db["inventory_items"].create_index(

@@ -2,10 +2,13 @@
 
 from app.models.inventory.base import ImportPreviewStatus, ListMetadata, MovementType, SearchMatchReason
 from app.models.inventory.import_previews import (
+    ImportSourceType,
+    InventoryImportPreviewCreate,
     InventoryImportPreviewListResponse,
     InventoryImportPreviewLineData,
     InventoryImportPreviewResponse,
     InventoryImportResult,
+    SupplierInvoiceLineCandidate,
 )
 from app.models.inventory.items import (
     InventoryCategoryListResponse,
@@ -46,10 +49,13 @@ __all__ = [
     "ListMetadata",
     "MovementType",
     "SearchMatchReason",
+    "ImportSourceType",
+    "InventoryImportPreviewCreate",
     "InventoryImportPreviewListResponse",
     "InventoryImportPreviewLineData",
     "InventoryImportPreviewResponse",
     "InventoryImportResult",
+    "SupplierInvoiceLineCandidate",
     "InventoryCategoryListResponse",
     "InventoryCategorySummary",
     "InventoryItemCreate",

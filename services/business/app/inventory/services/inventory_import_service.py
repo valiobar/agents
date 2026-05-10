@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import re
 from fastapi import HTTPException, status
+from pymongo.errors import DuplicateKeyError
 
 from app.company.services.company_service import CompanyService
 from app.inventory.models import (
@@ -189,7 +191,18 @@ class InventoryImportService:
         line: InventoryImportPreviewLine,
         line_index: int,
     ) -> tuple[int, int, int]:
-        item_id, items_created, items_updated = await self._resolve_line_item_id(user_id, preview, line)
+        already_imported = await self.movement_repo.has_source_movement(
+            user_id=user_id,
+            source_type="supplier_invoice_import",
+            source_id=preview.id,
+            source_line_id=str(line_index),
+        )
+        if already_imported:
+            return (0, 0, 0)
+
+        item_id, items_created, items_updated = await self._resolve_line_item_id(
+            user_id, preview, line, line_index
+        )
         if item_id is None:
             return (items_created, items_updated, 0)
 
@@ -203,15 +216,6 @@ class InventoryImportService:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Inventory location '{line.location_id}' not found in this company",
             )
-
-        already_imported = await self.movement_repo.has_source_movement(
-            user_id=user_id,
-            source_type="supplier_invoice_import",
-            source_id=preview.id,
-            source_line_id=str(line_index),
-        )
-        if already_imported:
-            return (items_created, items_updated, 0)
 
         movement_payload = StockMovementCreate.receipt_from_import(
             preview_id=preview.id,
@@ -233,6 +237,7 @@ class InventoryImportService:
         user_id: str,
         preview: InventoryImportPreviewInDB,
         line: InventoryImportPreviewLine,
+        line_index: int,
     ) -> tuple[str | None, int, int]:
         item_id = line.matched_item_id
         items_created = 0
@@ -247,12 +252,15 @@ class InventoryImportService:
             )
             return (item_id, items_created, items_updated + int(was_updated))
 
-        if line.proposed_item is None:
+        proposed = await self._build_proposed_item_for_line(
+            user_id=user_id,
+            company_id=preview.company_id,
+            line=line,
+            line_index=line_index,
+        )
+        if proposed is None:
             return (None, items_created, items_updated)
 
-        proposed = InventoryItemCreate(
-            **{**line.proposed_item.model_dump(mode="python"), "company_id": preview.company_id}
-        )
         existing_item = await self.item_repo.find_by_sku(user_id, preview.company_id, proposed.sku)
         if existing_item:
             was_updated = await self._fill_missing_selling_price(
@@ -263,12 +271,82 @@ class InventoryImportService:
             )
             return (existing_item.id, items_created, items_updated + int(was_updated))
 
-        new_item = await self.item_repo.create(
-            user_id=user_id,
-            payload=proposed,
-            changed_by_user_id=user_id,
-        )
+        try:
+            new_item = await self.item_repo.create(
+                user_id=user_id,
+                payload=proposed,
+                changed_by_user_id=user_id,
+            )
+        except DuplicateKeyError:
+            # Defensive retry for concurrent imports racing on generated SKU.
+            regenerated_sku = await self._generate_unique_sku(
+                user_id=user_id,
+                company_id=preview.company_id,
+                description=line.candidate.description,
+                line_index=line_index,
+                min_suffix=2,
+            )
+            regenerated_item = proposed.model_copy(update={"sku": regenerated_sku})
+            new_item = await self.item_repo.create(
+                user_id=user_id,
+                payload=regenerated_item,
+                changed_by_user_id=user_id,
+            )
         return (new_item.id, items_created + 1, items_updated)
+
+    async def _build_proposed_item_for_line(
+        self,
+        *,
+        user_id: str,
+        company_id: str,
+        line: InventoryImportPreviewLine,
+        line_index: int,
+    ) -> InventoryItemCreate | None:
+        if line.proposed_item is not None:
+            return InventoryItemCreate(
+                **{**line.proposed_item.model_dump(mode="python"), "company_id": company_id}
+            )
+
+        generated_sku = await self._generate_unique_sku(
+            user_id=user_id,
+            company_id=company_id,
+            description=line.candidate.description,
+            line_index=line_index,
+        )
+        return InventoryItemCreate(
+            company_id=company_id,
+            sku=generated_sku,
+            name=line.candidate.description,
+            unit=line.candidate.unit or "pcs",
+            selling_price=line.candidate.unit_price,
+        )
+
+    async def _generate_unique_sku(
+        self,
+        *,
+        user_id: str,
+        company_id: str,
+        description: str,
+        line_index: int,
+        min_suffix: int = 1,
+    ) -> str:
+        max_length = 64
+        normalized_description = re.sub(r"[^A-Z0-9]+", "-", description.upper()).strip("-")
+        safe_description = normalized_description or "ITEM"
+        base = f"AUTO-{safe_description}-{line_index + 1}"
+        base = base[:max_length]
+
+        if min_suffix <= 1 and await self.item_repo.find_by_sku(user_id, company_id, base) is None:
+            return base
+
+        suffix = max(min_suffix, 2)
+        while True:
+            suffix_token = f"-{suffix}"
+            truncated_base = base[: max_length - len(suffix_token)]
+            candidate_sku = f"{truncated_base}{suffix_token}"
+            if await self.item_repo.find_by_sku(user_id, company_id, candidate_sku) is None:
+                return candidate_sku
+            suffix += 1
 
     async def _fill_missing_selling_price(
         self,

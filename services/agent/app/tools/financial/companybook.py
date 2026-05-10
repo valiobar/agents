@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from langchain_core.tools import StructuredTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.clients.business import BusinessClientError
 from app.models.financial.companybook import CompanyBookPartnerMappingError
@@ -14,16 +14,19 @@ from app.tools.financial.operations import _with_scoped_company
 
 
 class SearchCompanyBookArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: str = Field(
         min_length=3,
         max_length=200,
         description="Company name or UIC to search in CompanyBook.BG.",
     )
     limit: int = Field(default=5, ge=1, le=10)
+    offset: int = Field(default=0, ge=0, le=10_000)
     active_only: bool = True
 
 
 class ImportCompanyBookPartnerArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     company_id: str | None = Field(
         default=None,
         max_length=64,
@@ -59,7 +62,7 @@ async def _resolve_existing_partner_by_uic(
         limit=20,
         offset=0,
     )
-    exact_matches = [partner for partner in matches if _matches_registration_number(partner, uic)]
+    exact_matches = [partner for partner in matches.items if _matches_registration_number(partner, uic)]
     return exact_matches[0] if len(exact_matches) == 1 else None
 
 
@@ -146,19 +149,30 @@ def build_companybook_tools(
 ) -> list[StructuredTool]:
     async def search_companybook_companies(**kwargs) -> str:
         args = SearchCompanyBookArgs.model_validate(kwargs)
+        requested_window = min(args.limit + args.offset, 50)
         try:
             response = await context.companybook_service.search_companies(
                 name=args.name,
-                limit=args.limit,
+                limit=requested_window,
                 active_only=args.active_only,
             )
         except CompanyBookError as exc:
             return exc.user_message
 
+        total_count = response.total if response.total is not None else len(response.results)
+        page_items = [result.model_dump(mode="json") for result in response.results[args.offset : args.offset + args.limit]]
+        returned_count = len(page_items)
+        next_offset = args.offset + returned_count if args.offset + returned_count < total_count else None
         return _json(
             {
-                "results": [result.model_dump(mode="json") for result in response.results],
-                "total": response.total,
+                "total_count": total_count,
+                "returned_count": returned_count,
+                "offset": args.offset,
+                "limit": args.limit,
+                "truncated": next_offset is not None,
+                "next_offset": next_offset,
+                "items": page_items,
+                "source": "companybook",
             }
         )
 

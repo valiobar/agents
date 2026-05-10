@@ -10,7 +10,7 @@ The Agent Service owns user-created agents and persisted chat history. It receiv
 
 ### Business Split Baseline
 
-The Business Service split is active. Public `/companies`, `/partners`, `/invoices`, `/expenses`, and `/inventory/*` URLs exist at the gateway, but the gateway routes those prefixes to Business Service. Agent exposes only agent lifecycle, chat, conversation history, agent receipt-draft helper endpoints, and health endpoints.
+The Business Service split is active. Public `/companies`, `/partners`, `/invoices`, `/expenses`, and `/inventory/*` URLs exist at the gateway, but the gateway routes those prefixes to Business Service. Agent exposes only agent lifecycle, chat, conversation history, document-intake orchestration endpoints, receipt-draft compatibility endpoints, and health endpoints.
 
 Runtime guardrails:
 
@@ -90,6 +90,10 @@ All client calls go through the API Gateway at `http://localhost:8000`. Internal
 | `PATCH /agents/{agent_id}` | Implemented | Update name, description, or config |
 | `DELETE /agents/{agent_id}` | Implemented | Delete an agent |
 | `POST /agents/{agent_id}/chat` | Implemented | Stream chat response via SSE |
+| `POST /agents/{agent_id}/document-intake` | Implemented | Classify/extract upload and return workflow review union |
+| `POST /agents/{agent_id}/document-intake/supplier-invoice/inventory-imports/confirm` | Implemented | Confirm inventory import stage and continue supplier invoice flow |
+| `POST /agents/{agent_id}/expense-drafts` | Implemented (compatibility) | Legacy receipt draft endpoint kept for older clients |
+| `POST /agents/{agent_id}/expenses/confirm` | Implemented | Final explicit approval endpoint that records expense |
 | `GET /conversations/{conversation_id}` | Implemented | Load persisted conversation history |
 
 Business-owned public routes are documented under `docs/services/business/`. Gateway keeps their public URLs stable while routing them to Business Service.

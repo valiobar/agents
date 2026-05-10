@@ -3,7 +3,18 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile, status
 from starlette.responses import StreamingResponse
 
-from app.dependencies import get_agent_service, get_chat_service, get_receipt_service, get_user_id
+from app.dependencies import (
+    get_agent_service,
+    get_chat_service,
+    get_document_intake_service,
+    get_receipt_service,
+    get_user_id,
+)
+from app.models.document_intake import (
+    ConfirmInventoryImportForExpenseRequest,
+    ConfirmInventoryImportForExpenseResponse,
+    DocumentIntakeResponse,
+)
 from app.models.shared.agent import AgentCreate, AgentResponse, AgentUpdate
 from app.models.shared.chat import ChatRequest
 from app.models.financial.receipt import (
@@ -14,6 +25,7 @@ from app.models.financial.receipt import (
 )
 from app.services.agent_service import AgentService
 from app.services.chat_service import ChatService
+from app.services.document_intake_service import DocumentIntakeService
 from app.services.receipt_service import ReceiptService
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -82,6 +94,44 @@ async def chat(
     return StreamingResponse(
         service.stream_chat(user_id, agent_id, payload),
         media_type="text/event-stream",
+    )
+
+
+@router.post(
+    "/{agent_id}/document-intake",
+    response_model=DocumentIntakeResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_document_intake(
+    agent_id: str,
+    file: Annotated[UploadFile, File()],
+    user_id: Annotated[str, Depends(get_user_id)],
+    service: Annotated[DocumentIntakeService, Depends(get_document_intake_service)],
+    requested_type: Annotated[ExpenseDraftRequestSourceDocumentType, Form()] = "auto",
+) -> DocumentIntakeResponse:
+    return await service.create_intake(
+        user_id=user_id,
+        agent_id=agent_id,
+        file=file,
+        requested_type=requested_type,
+    )
+
+
+@router.post(
+    "/{agent_id}/document-intake/supplier-invoice/inventory-imports/confirm",
+    response_model=ConfirmInventoryImportForExpenseResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def confirm_supplier_invoice_inventory_import(
+    agent_id: str,
+    payload: ConfirmInventoryImportForExpenseRequest,
+    user_id: Annotated[str, Depends(get_user_id)],
+    service: Annotated[DocumentIntakeService, Depends(get_document_intake_service)],
+) -> ConfirmInventoryImportForExpenseResponse:
+    return await service.confirm_supplier_invoice_inventory_import(
+        user_id=user_id,
+        agent_id=agent_id,
+        payload=payload,
     )
 
 

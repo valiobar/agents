@@ -4,16 +4,26 @@ from decimal import Decimal
 
 from fastapi import HTTPException, status
 
+from app.common.models import ListEnvelope, make_list_envelope
+from app.company.services.company_service import CompanyService
 from app.financial.models import ExpenseCreate, ExpenseFilters, ExpenseInDB, ExpenseItem
 from app.financial.repositories.expense_repo import ExpenseRepository
 from app.financial.repositories.financial_utils import quantize_money, quantize_rate
+from app.partner.repositories.partner_repo import PartnerRepository
 
 _EXPENSE_NOT_FOUND_DETAIL = "Expense not found"
 
 
 class ExpenseService:
-    def __init__(self, repo: ExpenseRepository) -> None:
+    def __init__(
+        self,
+        repo: ExpenseRepository,
+        company_service: CompanyService,
+        partner_repo: PartnerRepository,
+    ) -> None:
         self.repo = repo
+        self.company_service = company_service
+        self.partner_repo = partner_repo
 
     def _calculate_items(self, payload: ExpenseCreate) -> tuple[list[ExpenseItem] | None, Decimal]:
         if not payload.items:
@@ -37,6 +47,11 @@ class ExpenseService:
         return quantize_money(amount * quantize_rate(payload.deductible_rate))
 
     async def create_expense(self, user_id: str, payload: ExpenseCreate) -> ExpenseInDB:
+        await self.company_service.require_company(user_id, payload.company_id)
+        if payload.partner_id:
+            partner = await self.partner_repo.get_by_id(user_id, payload.partner_id)
+            if partner is None or partner.company_id != payload.company_id:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Partner not found")
         items, amount = self._calculate_items(payload)
         doc = payload.model_dump(exclude={"items"}, mode="python")
         doc.update(
@@ -52,7 +67,16 @@ class ExpenseService:
     async def list_expenses(
         self, user_id: str, filters: ExpenseFilters, limit: int, offset: int
     ) -> list[ExpenseInDB]:
+        await self.company_service.require_company(user_id, filters.company_id)
         return await self.repo.list_by_user(user_id, filters, limit, offset)
+
+    async def list_expenses_envelope(
+        self, user_id: str, filters: ExpenseFilters, limit: int, offset: int
+    ) -> ListEnvelope[ExpenseInDB]:
+        await self.company_service.require_company(user_id, filters.company_id)
+        items = await self.repo.list_by_user(user_id, filters, limit, offset)
+        total_count = await self.repo.count_by_user(user_id, filters)
+        return make_list_envelope(items=items, total_count=total_count, offset=offset, limit=limit)
 
     async def get_expense(self, user_id: str, expense_id: str) -> ExpenseInDB:
         expense = await self.repo.get_by_id(user_id, expense_id)

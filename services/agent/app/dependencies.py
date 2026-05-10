@@ -15,6 +15,10 @@ from app.services.agent_service import AgentService
 from app.services.companybook_service import CompanyBookService
 from app.services.chat_service import ChatService
 from app.services.conversation_service import ConversationService
+from app.services.document_intake_service import (
+    DocumentIntakeService,
+    create_document_workflow_registry,
+)
 from app.services.receipt_service import ReceiptService
 from app.utils.db import get_database
 
@@ -70,12 +74,31 @@ def get_knowledge_client(http: httpx.AsyncClient = Depends(get_knowledge_http)) 
     return KnowledgeClient(http)
 
 
+def get_document_intake_service(
+    agent_repo: AgentRepository = Depends(get_agent_repo),
+    knowledge_client: KnowledgeClient = Depends(get_knowledge_client),
+    business_client: BusinessClient = Depends(get_business_client),
+) -> DocumentIntakeService:
+    return DocumentIntakeService(
+        agent_repo=agent_repo,
+        knowledge_client=knowledge_client,
+        business_client=business_client,
+        workflows=create_document_workflow_registry(),
+    )
+
+
 def get_receipt_service(
     agent_repo: AgentRepository = Depends(get_agent_repo),
     knowledge_client: KnowledgeClient = Depends(get_knowledge_client),
     business_client: BusinessClient = Depends(get_business_client),
+    document_intake_service: DocumentIntakeService = Depends(get_document_intake_service),
 ) -> ReceiptService:
-    return ReceiptService(agent_repo, knowledge_client, business_client)
+    return ReceiptService(
+        agent_repo,
+        knowledge_client,
+        business_client,
+        document_intake_service=document_intake_service,
+    )
 
 
 def get_agent_service(

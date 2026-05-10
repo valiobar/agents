@@ -73,6 +73,23 @@ Returned by `POST /documents`, `GET /documents`, and `PUT /documents/{id}`.
 
 Public responses intentionally omit `user_id`, `content_hash`, `error_message`, and internal metadata. They include `company_id` so frontend query caches and lists can stay company-scoped.
 
+## Expense Draft Extraction Contract
+
+Source: `services/knowledge/app/routes/documents.py` and `services/knowledge/app/models/financial.py`
+
+Knowledge exposes `POST /documents/expense-draft` for upload-time classify/extract workflows. Agent uses this endpoint as the current compatibility source for `POST /agents/{agent_id}/document-intake`.
+
+The response shape contains:
+
+- `document` (`DocumentResponse`)
+- `draft` (`ExpenseDraft`)
+- `extracted_text` (`string | null`)
+- `provider` (`string`)
+- `model` (`string`)
+- `extracted_at` (`datetime`)
+
+Ownership rule: this endpoint performs extraction only. It does not approve workflows, confirm inventory imports, or create Business expense/inventory records.
+
 ## ChromaDB Chunk Metadata
 
 Owned by: Knowledge Base Service

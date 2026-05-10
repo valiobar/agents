@@ -88,6 +88,10 @@ export function ExpenseDraftConfirmation({
   const sourceDocumentType = form.watch("source_document_type");
   const requiresDocumentTypeConfirmation = draft.confidence < DOCUMENT_TYPE_CONFIDENCE_THRESHOLD;
   const canSubmit = !requiresDocumentTypeConfirmation || isDocumentTypeConfirmed;
+  const reviewTitle =
+    draft.source_document_type === "invoice"
+      ? "Review extracted supplier invoice expense"
+      : "Review extracted expense";
 
   useEffect(() => {
     setIsDocumentTypeConfirmed(draft.confidence >= DOCUMENT_TYPE_CONFIDENCE_THRESHOLD);
@@ -107,7 +111,7 @@ export function ExpenseDraftConfirmation({
     <Card className={`mx-3 mb-3 mt-3 flex max-h-[min(60vh,34rem)] flex-col overflow-hidden shadow-none ${confirmed ? "border-green-200 dark:border-green-800" : ""}`}>
       <CardHeader className="space-y-0.5 px-4 py-3">
         <div className="flex items-center gap-2 text-sm font-medium">
-          {confirmed ? "Expense recorded" : "Review extracted expense"}
+          {confirmed ? "Expense recorded" : reviewTitle}
           {confirmed ? (
             <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
               Confirmed

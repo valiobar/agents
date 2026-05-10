@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import re
 import time
 from dataclasses import dataclass
@@ -39,6 +40,47 @@ def _format_chunk(index: int, chunk: dict[str, Any]) -> str:
     body_text = body_raw if isinstance(body_raw, str) else str(body_raw)
     body = _snippet(body_text, _RAG_CHUNK_BODY_MAX)
     return f"[{index + 1}] collection={coll} score={score}{extra}\n{body}"
+
+
+def _build_source_summary(
+    chunks: list[dict[str, Any]],
+    *,
+    include_user_documents: bool,
+) -> dict[str, Any]:
+    collections: dict[str, int] = {}
+    documents: dict[str, int] = {}
+    top_score: float | None = None
+    user_documents_included = False
+
+    for chunk in chunks:
+        collection = str(chunk.get("collection") or "unknown")
+        collections[collection] = collections.get(collection, 0) + 1
+
+        metadata = chunk.get("metadata")
+        metadata_dict = metadata if isinstance(metadata, dict) else {}
+        document_id = str(
+            metadata_dict.get("document_id")
+            or metadata_dict.get("source")
+            or "unknown"
+        )
+        documents[document_id] = documents.get(document_id, 0) + 1
+
+        score = chunk.get("score")
+        if isinstance(score, (int, float)):
+            score_value = float(score)
+            top_score = score_value if top_score is None else max(top_score, score_value)
+
+        if collection.startswith("user_"):
+            user_documents_included = True
+
+    return {
+        "retrieved_count": len(chunks),
+        "collections": collections,
+        "documents": documents,
+        "top_score": top_score,
+        "user_documents_requested": include_user_documents,
+        "user_documents_included": user_documents_included,
+    }
 
 
 def _normalize_query(query: str) -> str:
@@ -207,13 +249,18 @@ def _build_rag_tool(
             len(chunks),
         )
 
-        parts = [
+        chunk_parts = [
             _format_chunk(i, c)
             for i, c in enumerate(chunks)
             if isinstance(c, dict)
         ]
-        if not parts:
+        if not chunk_parts:
             return "No relevant knowledge base chunks found."
+        summary = _build_source_summary(
+            [c for c in chunks if isinstance(c, dict)],
+            include_user_documents=bool(payload["include_user_documents"]),
+        )
+        parts = [f"RAG source summary: {json.dumps(summary, ensure_ascii=False)}", *chunk_parts]
         return "\n\n".join(parts)
 
     rag_tool_impl.__doc__ = config.description

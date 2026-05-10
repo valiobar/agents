@@ -54,7 +54,7 @@ MongoDB stores no raw file bytes. ChromaDB stores chunk text, embeddings, and me
 | `GET /documents` | `list[DocumentResponse]` | Requires `x-user-id`, supports `limit` and `offset` |
 | `PUT /documents/{document_id}` | `DocumentResponse` | Requires `x-user-id`, multipart `file` |
 | `DELETE /documents/{document_id}` | `204 No Content` | Requires `x-user-id` |
-| `POST /retrieve` | `RetrievalResponse` | Uses request `user_id` or `x-user-id`; can search global and user collections |
+| `POST /retrieve` | `RetrievalResponse` | Uses request `user_id` or `x-user-id`; supports `company_id` filtering and `include_user_documents` for global/user collection selection |
 
 ## Restrictions
 
@@ -63,3 +63,9 @@ MongoDB stores no raw file bytes. ChromaDB stores chunk text, embeddings, and me
 - Public response models must not expose ChromaDB client internals.
 - MongoDB indexes must support document list, deduplication, and status filters.
 - Retrieval results should include only chunk text, score, collection name, and chunk metadata needed by downstream agents.
+
+## Retrieval Metadata Contract
+
+`POST /retrieve` returns chunk-level metadata (`collection`, `score`, and `metadata` with document attribution) that downstream agents use to build runtime provenance summaries.
+
+The Accountant runtime prepends a `RAG source summary` header derived from this payload (`retrieved_count`, collection/document distribution, top score, and user-document inclusion flags). Knowledge should preserve stable chunk metadata keys so this summary remains reliable.

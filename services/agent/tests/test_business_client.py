@@ -11,7 +11,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.clients.business import BusinessClient, BusinessClientError
 from app.models.financial import ExpenseFilters
-from app.models.inventory import InventoryItemCreate, InventorySearchRequest, StockMovementCreate
+from app.models.inventory import (
+    InventoryImportPreviewCreate,
+    InventoryItemCreate,
+    InventorySearchRequest,
+    StockMovementCreate,
+)
 from app.models.financial.receipt import ExtractedPartnerDraft
 
 
@@ -22,16 +27,82 @@ class BusinessClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(request.url.path, "/expenses")
             self.assertEqual(request.url.params["limit"], "20")
             self.assertEqual(request.url.params["offset"], "0")
-            return httpx.Response(200, json=[])
+            return httpx.Response(
+                200,
+                json={
+                    "total_count": 0,
+                    "returned_count": 0,
+                    "offset": 0,
+                    "limit": 20,
+                    "truncated": False,
+                    "next_offset": None,
+                    "items": [],
+                },
+            )
 
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(handler),
             base_url="http://business:8005",
         ) as http:
             client = BusinessClient(http)
-            result = await client.list_expenses("user-1", ExpenseFilters(), limit=20, offset=0)
+            result = await client.list_expenses(
+                "user-1",
+                ExpenseFilters(company_id="company-1"),
+                limit=20,
+                offset=0,
+            )
 
-        self.assertEqual(result, [])
+        self.assertEqual(result.total_count, 0)
+        self.assertEqual(result.items, [])
+
+    async def test_list_companies_supports_query_and_envelope_parsing(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(request.headers["x-user-id"], "user-1")
+            self.assertEqual(request.url.path, "/companies")
+            self.assertEqual(request.url.params["query"], "alpha")
+            self.assertEqual(request.url.params["limit"], "5")
+            self.assertEqual(request.url.params["offset"], "10")
+            return httpx.Response(
+                200,
+                json={
+                    "total_count": 1,
+                    "returned_count": 1,
+                    "offset": 10,
+                    "limit": 5,
+                    "truncated": False,
+                    "next_offset": None,
+                    "items": [
+                        {
+                            "id": "company-1",
+                            "user_id": "user-1",
+                            "name": "Alpha Ltd",
+                            "registration_number": "123456789",
+                            "vat_number": None,
+                            "city": "Sofia",
+                            "country": "Bulgaria",
+                            "address": "1 Main St",
+                            "accountable_person": "Owner",
+                            "email": None,
+                            "phone": None,
+                            "logo_data_url": None,
+                            "is_default": False,
+                            "created_at": "2026-01-01T00:00:00Z",
+                            "updated_at": "2026-01-01T00:00:00Z",
+                        }
+                    ],
+                },
+            )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            base_url="http://business:8005",
+        ) as http:
+            client = BusinessClient(http)
+            result = await client.list_companies("user-1", query="alpha", limit=5, offset=10)
+
+        self.assertEqual(result.total_count, 1)
+        self.assertEqual(result.returned_count, 1)
+        self.assertEqual(result.items[0].name, "Alpha Ltd")
 
     async def test_company_exists_uses_business_validation_endpoint(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
@@ -59,7 +130,12 @@ class BusinessClientTests(unittest.IsolatedAsyncioTestCase):
             client = BusinessClient(http)
 
             with self.assertRaises(BusinessClientError) as raised:
-                await client.list_expenses("user-1", ExpenseFilters(), limit=20, offset=0)
+                await client.list_expenses(
+                    "user-1",
+                    ExpenseFilters(company_id="company-1"),
+                    limit=20,
+                    offset=0,
+                )
 
         self.assertEqual(raised.exception.status_code, 409)
         self.assertEqual(raised.exception.message, "Partner already exists.")
@@ -69,29 +145,40 @@ class BusinessClientTests(unittest.IsolatedAsyncioTestCase):
 
         def handler(request: httpx.Request) -> httpx.Response:
             requests.append(request)
-            if request.method == "GET" and request.url.path == "/partners":
+            if request.method == "POST" and request.url.path == "/partners/resolve":
+                payload = json.loads(request.read())
+                self.assertEqual(payload["company_id"], "company-1")
+                self.assertEqual(payload["kind"], "supplier")
+                self.assertEqual(payload["registration_number"], "123")
                 return httpx.Response(
                     200,
-                    json=[
-                        {
-                            "id": "partner-1",
-                            "user_id": "user-1",
-                            "company_id": "company-1",
-                            "kind": "client",
-                            "name": "Vendor Ltd",
-                            "registration_number": "123",
-                            "vat_number": None,
-                            "city": "Sofia",
-                            "country": "Bulgaria",
-                            "address": "Old address",
-                            "accountable_person": "Old Person",
-                            "email": None,
-                            "phone": None,
-                            "notes": None,
-                            "created_at": "2026-01-01T00:00:00Z",
-                            "updated_at": "2026-01-01T00:00:00Z",
-                        }
-                    ],
+                    json={
+                        "candidates": [
+                            {
+                                "partner": {
+                                    "id": "partner-1",
+                                    "user_id": "user-1",
+                                    "company_id": "company-1",
+                                    "kind": "client",
+                                    "name": "Vendor Ltd",
+                                    "registration_number": "123",
+                                    "vat_number": None,
+                                    "city": "Sofia",
+                                    "country": "Bulgaria",
+                                    "address": "Old address",
+                                    "accountable_person": "Old Person",
+                                    "email": None,
+                                    "phone": None,
+                                    "notes": None,
+                                    "created_at": "2026-01-01T00:00:00Z",
+                                    "updated_at": "2026-01-01T00:00:00Z",
+                                },
+                                "match_type": "registration_number_exact",
+                                "score": 0.99,
+                                "match_reasons": ["Registration number matches exactly."],
+                            }
+                        ],
+                    },
                 )
             if request.method == "PATCH" and request.url.path == "/partners/partner-1":
                 self.assertEqual(request.url.params["company_id"], "company-1")
@@ -152,36 +239,43 @@ class BusinessClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.partner.address, "New address")
         self.assertEqual(result.partner.accountable_person, "New Person")
         self.assertEqual(result.partner.email, "vendor@example.com")
-        self.assertEqual([request.method for request in requests], ["GET", "PATCH"])
+        self.assertEqual([request.method for request in requests], ["POST", "PATCH"])
 
     async def test_find_or_create_skips_patch_when_vendor_has_no_nonempty_updates(self) -> None:
         requests: list[httpx.Request] = []
 
         def handler(request: httpx.Request) -> httpx.Response:
             requests.append(request)
-            if request.method == "GET" and request.url.path == "/partners":
+            if request.method == "POST" and request.url.path == "/partners/resolve":
                 return httpx.Response(
                     200,
-                    json=[
-                        {
-                            "id": "partner-1",
-                            "user_id": "user-1",
-                            "company_id": "company-1",
-                            "kind": "supplier",
-                            "name": "Vendor Ltd",
-                            "registration_number": "123",
-                            "vat_number": None,
-                            "city": "Sofia",
-                            "country": "Bulgaria",
-                            "address": "Existing address",
-                            "accountable_person": "Existing Person",
-                            "email": None,
-                            "phone": None,
-                            "notes": None,
-                            "created_at": "2026-01-01T00:00:00Z",
-                            "updated_at": "2026-01-01T00:00:00Z",
-                        }
-                    ],
+                    json={
+                        "candidates": [
+                            {
+                                "partner": {
+                                    "id": "partner-1",
+                                    "user_id": "user-1",
+                                    "company_id": "company-1",
+                                    "kind": "supplier",
+                                    "name": "Vendor Ltd",
+                                    "registration_number": "123",
+                                    "vat_number": None,
+                                    "city": "Sofia",
+                                    "country": "Bulgaria",
+                                    "address": "Existing address",
+                                    "accountable_person": "Existing Person",
+                                    "email": None,
+                                    "phone": None,
+                                    "notes": None,
+                                    "created_at": "2026-01-01T00:00:00Z",
+                                    "updated_at": "2026-01-01T00:00:00Z",
+                                },
+                                "match_type": "registration_number_exact",
+                                "score": 0.99,
+                                "match_reasons": ["Registration number matches exactly."],
+                            }
+                        ],
+                    },
                 )
             return httpx.Response(500, json={"detail": "Unexpected request"})
 
@@ -211,7 +305,7 @@ class BusinessClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.status, "matched")
         self.assertIsNotNone(result.partner)
         self.assertEqual(result.partner.address, "Existing address")
-        self.assertEqual([request.method for request in requests], ["GET"])
+        self.assertEqual([request.method for request in requests], ["POST"])
 
     async def test_list_inventory_items_sends_company_filter(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:
@@ -476,6 +570,72 @@ class BusinessClientTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.id, "preview-1")
         self.assertEqual(result.status, "draft")
+
+    async def test_create_import_preview_posts_typed_payload(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            self.assertEqual(request.url.path, "/inventory/import-previews")
+            self.assertEqual(request.method, "POST")
+            payload = json.loads(request.read())
+            self.assertEqual(payload["company_id"], "company-1")
+            self.assertEqual(payload["source_type"], "supplier_invoice_upload")
+            self.assertEqual(len(payload["lines"]), 1)
+            self.assertEqual(payload["lines"][0]["description"], "Widget")
+            self.assertEqual(payload["lines"][0]["quantity"], "5")
+            return httpx.Response(
+                200,
+                json={
+                    "id": "preview-1",
+                    "user_id": "user-1",
+                    "company_id": "company-1",
+                    "document_id": "doc-1",
+                    "source_type": "supplier_invoice_upload",
+                    "status": "draft",
+                    "lines": [
+                        {
+                            "candidate": {
+                                "description": "Widget",
+                                "sku": "SKU-001",
+                                "barcode": None,
+                                "quantity": "5",
+                                "unit": "pcs",
+                                "unit_price": "10.00",
+                            },
+                            "matched_item_id": None,
+                            "proposed_item": None,
+                            "location_id": "loc-1",
+                            "receipt_quantity": "5",
+                            "warnings": [],
+                        }
+                    ],
+                },
+            )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            base_url="http://business:8005",
+        ) as http:
+            client = BusinessClient(http)
+            result = await client.create_import_preview(
+                "user-1",
+                InventoryImportPreviewCreate(
+                    company_id="company-1",
+                    document_id="doc-1",
+                    lines=[
+                        {
+                            "description": "Widget",
+                            "sku": "SKU-001",
+                            "barcode": None,
+                            "quantity": "5",
+                            "unit": "pcs",
+                            "unit_price": "10.00",
+                        }
+                    ],
+                ),
+            )
+
+        self.assertEqual(result.id, "preview-1")
+        self.assertEqual(result.company_id, "company-1")
+        self.assertEqual(result.lines[0].candidate.description, "Widget")
 
     async def test_confirm_import_preview(self) -> None:
         def handler(request: httpx.Request) -> httpx.Response:

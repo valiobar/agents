@@ -6,7 +6,6 @@ import { useMemo } from "react";
 import { useCompanies } from "@/entities/company/api/queries";
 import { CreateInventoryItemDialog } from "@/features/create-inventory-item/ui/create-inventory-item-dialog";
 import { RecordStockMovementDialog } from "@/features/record-stock-movement/ui/record-stock-movement-dialog";
-import { ImportPreviewTable } from "@/widgets/import-preview-table/ui/import-preview-table";
 import { InventoryTable } from "@/widgets/inventory-table/ui/inventory-table";
 
 export default function InventoryPage() {
@@ -44,7 +43,6 @@ export default function InventoryPage() {
       </div>
 
       <InventoryTable />
-      <ImportPreviewTable companyId={companyId} />
     </section>
   );
 }

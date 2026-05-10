@@ -36,6 +36,7 @@ async def list_items(
     company_id: Annotated[str, Query(min_length=1)],
     category: str | None = None,
     is_active: bool | None = None,
+    search: Annotated[str | None, Query(min_length=1, max_length=200)] = None,
     sku: str | None = None,
     barcode: str | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
@@ -45,6 +46,7 @@ async def list_items(
         company_id=company_id,
         category=category,
         is_active=is_active,
+        search=search,
         sku=sku,
         barcode=barcode,
     )

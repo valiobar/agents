@@ -22,7 +22,7 @@ sequenceDiagram
     Gateway-->>Client: CompanyResponse
 ```
 
-Company list/get/update/delete follow the same `x-user-id` scoping. Invalid company ids and cross-user access return `404 Company not found`.
+Company list/get/update/delete follow the same `x-user-id` scoping. `GET /companies` supports optional `query` (name/registration/vat search) and returns the shared list envelope. Invalid company ids and cross-user access return `404 Company not found`.
 
 ## Partner Flow
 
@@ -88,8 +88,8 @@ sequenceDiagram
     Client->>Gateway: GET /invoices?company_id=...&status=...
     Gateway->>Business: forward with x-user-id
     Business->>Mongo: find invoices by user_id and filters
-    Mongo-->>Business: sorted invoice list
-    Business-->>Gateway: list[InvoiceResponse]
+    Mongo-->>Business: sorted invoice list + count
+    Business-->>Gateway: ListEnvelope[InvoiceResponse]
     Gateway-->>Client: JSON response
 
     Client->>Gateway: PATCH /invoices/{invoice_id}
@@ -102,7 +102,7 @@ sequenceDiagram
     Gateway-->>Client: JSON response
 ```
 
-Supported invoice filters are `company_id`, `partner_id`, `status`, `date_from`, `date_to`, `counterparty`, `amount_min`, `amount_max`, and `category`. Lists are sorted by newest `issue_date` first.
+Supported invoice filters are `company_id`, `partner_id`, `status`, `date_from`, `date_to`, `counterparty`, `amount_min`, `amount_max`, and `category`. Lists are sorted by newest `issue_date` first and returned in a list envelope with pagination metadata.
 
 ## Expense Flow
 
@@ -116,20 +116,23 @@ sequenceDiagram
     Client->>Gateway: POST /expenses + JWT
     Gateway->>Gateway: validate JWT and inject x-user-id
     Gateway->>Business: POST /expenses + x-user-id
-    Business->>Business: validate ExpenseCreate
+    Business->>Business: validate ExpenseCreate (requires company_id)
     alt item lines supplied
         Business->>Business: calculate amount from quantity * unit_price
     else amount supplied
         Business->>Business: use supplied amount
     end
     Business->>Business: calculate deductible_amount
-    Business->>Mongo: insert expense scoped to user_id
+    Business->>Mongo: validate company and optional partner ownership
+    Business->>Mongo: insert expense scoped to user_id + company_id
     Mongo-->>Business: saved expense
     Business-->>Gateway: ExpenseResponse
     Gateway-->>Client: ExpenseResponse
 ```
 
-Supported expense filters are `category`, `counterparty`, `date_from`, `date_to`, `deductible`, `amount_min`, and `amount_max`. Lists are sorted by newest `expense_date` first.
+Supported expense filters are `company_id` (required), optional `partner_id`, `category`, `counterparty`, `date_from`, `date_to`, `deductible`, `amount_min`, and `amount_max`. Lists are sorted by newest `expense_date` first and returned in a list envelope with pagination metadata.
+
+Legacy expenses without `company_id` require migration before they appear in these company-scoped list and summary flows (`scripts/migrations/backfill_expense_company_id.py`).
 
 ## Financial Summary Flow
 
@@ -155,11 +158,50 @@ sequenceDiagram
         Mongo-->>ExpenseRepo: grouped expense rows
         ExpenseRepo-->>Business: expense totals by key and currency
     end
-    Business->>Business: merge totals, convert BGN/EUR, sort buckets
+    Business->>Business: merge source totals and convert supported currencies to EUR top-level totals
     Business-->>Agent: FinancialSummaryResponse
 ```
 
 `/financial-summary` is used by Agent tools over the internal network. It is still a normal FastAPI endpoint with `x-user-id` scoping, so it can be smoke-tested directly from another service container.
+
+Top-level financial totals are always EUR-denominated (`currency="EUR"`). Source-currency totals remain in `totals_by_currency` and bucket-level `totals_by_currency`; conversion metadata is exposed in `exchange_rates_to_eur`.
+
+`partner_id` summary filters require `company_id`.
+
+## Partner Resolve Flow
+
+```mermaid
+sequenceDiagram
+    participant Agent
+    participant Business
+    participant PartnerService
+    participant Mongo
+
+    Agent->>Business: POST /partners/resolve + x-user-id
+    Business->>PartnerService: resolve_partner(user_id, payload)
+    PartnerService->>Mongo: query candidates within company_id
+    PartnerService->>PartnerService: score by id/reg/vat/name match
+    PartnerService-->>Business: ranked candidates with match reasons
+    Business-->>Agent: PartnerResolveResponse { candidates[] }
+```
+
+Each candidate includes `match_type`, `score`, and `match_reasons` so callers can show ambiguity instead of auto-selecting weak matches.
+
+## Shared List Envelope
+
+`GET /companies`, `GET /partners`, `GET /invoices`, and `GET /expenses` all return:
+
+```json
+{
+  "total_count": 0,
+  "returned_count": 0,
+  "offset": 0,
+  "limit": 50,
+  "truncated": false,
+  "next_offset": null,
+  "items": []
+}
+```
 
 ## Company Validation Flow
 

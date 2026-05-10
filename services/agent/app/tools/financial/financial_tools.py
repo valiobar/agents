@@ -4,7 +4,7 @@ from datetime import UTC, date, datetime
 import json
 
 from langchain_core.tools import StructuredTool
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from app.clients.business import BusinessClientError
 from app.models.financial import (
@@ -16,6 +16,11 @@ from app.models.financial import (
 )
 from app.runtime.tool_context import ToolContext
 from app.tools.financial.company_scope import _scoped_company_id, _with_scoped_company
+
+_UNASSIGNED_COMPANY_DESCRIPTION = (
+    "Required when the agent is not assigned to one company. "
+    "When the agent is assigned, the tool uses that company_id automatically."
+)
 
 
 def _today() -> date:
@@ -30,14 +35,20 @@ def _first_day_next_month() -> date:
 
 
 class QueryInvoicesArgs(InvoiceFilters):
+    model_config = ConfigDict(extra="forbid")
     limit: int = Field(default=20, ge=1, le=50)
+    offset: int = Field(default=0, ge=0, le=10_000)
 
 
 class QueryExpensesArgs(ExpenseFilters):
+    model_config = ConfigDict(extra="forbid")
+    company_id: str | None = Field(default=None, description=_UNASSIGNED_COMPANY_DESCRIPTION)
     limit: int = Field(default=20, ge=1, le=50)
+    offset: int = Field(default=0, ge=0, le=10_000)
 
 
 class CreateInvoiceArgs(InvoiceCreate):
+    model_config = ConfigDict(extra="forbid")
     issue_date: date = Field(default_factory=_today, description="Defaults to today in UTC.")
     tax_event_date: date = Field(default_factory=_today, description="Defaults to today in UTC.")
     due_date: date | None = Field(
@@ -66,10 +77,16 @@ class CreateInvoiceArgs(InvoiceCreate):
 
 
 class RecordExpenseArgs(ExpenseCreate):
+    model_config = ConfigDict(extra="forbid")
+    company_id: str | None = Field(default=None, description=_UNASSIGNED_COMPANY_DESCRIPTION)
     confirmed: bool = Field(
         default=False,
         description="Must be true only after the user explicitly confirms recording the expense.",
     )
+
+
+class GetFinancialSummaryArgs(FinancialSummaryRequest):
+    model_config = ConfigDict(extra="forbid")
 
 
 def _json(data: object) -> str:
@@ -79,7 +96,7 @@ def _json(data: object) -> str:
 def build_financial_tools(user_id: str, company_id: str | None, context: ToolContext) -> list[StructuredTool]:
     async def query_invoices(**kwargs) -> str:
         args = QueryInvoicesArgs.model_validate(kwargs)
-        filters_data = args.model_dump(exclude={"limit"})
+        filters_data = args.model_dump(exclude={"limit", "offset"})
         target_company_id, scope_error = _scoped_company_id(company_id, filters_data.get("company_id"), "querying invoices")
         if scope_error:
             return scope_error
@@ -91,28 +108,33 @@ def build_financial_tools(user_id: str, company_id: str | None, context: ToolCon
                 user_id,
                 filters,
                 limit=args.limit,
-                offset=0,
+                offset=args.offset,
             )
         except BusinessClientError as exc:
             return exc.message
-        return _json([item.model_dump(mode="json") for item in invoices])
+        return _json(invoices.model_dump(mode="json"))
 
     async def query_expenses(**kwargs) -> str:
         args = QueryExpensesArgs.model_validate(kwargs)
-        filters = ExpenseFilters.model_validate(args.model_dump(exclude={"limit"}))
-        try:
-            expenses = await context.business_client.list_expenses(
-                user_id,
-                filters,
-                limit=args.limit,
-                offset=0,
-            )
-        except BusinessClientError as exc:
-            return exc.message
-        return _json([item.model_dump(mode="json") for item in expenses])
+        async def run(target_company_id: str) -> str:
+            filters_data = args.model_dump(exclude={"limit", "offset"})
+            filters_data["company_id"] = target_company_id
+            filters = ExpenseFilters.model_validate(filters_data)
+            try:
+                expenses = await context.business_client.list_expenses(
+                    user_id,
+                    filters,
+                    limit=args.limit,
+                    offset=args.offset,
+                )
+            except BusinessClientError as exc:
+                return exc.message
+            return _json(expenses.model_dump(mode="json"))
+
+        return await _with_scoped_company(company_id, args.company_id, "querying expenses", run)
 
     async def get_financial_summary(**kwargs) -> str:
-        request_data = FinancialSummaryRequest.model_validate(kwargs).model_dump()
+        request_data = GetFinancialSummaryArgs.model_validate(kwargs).model_dump()
         target_company_id, scope_error = _scoped_company_id(
             company_id,
             request_data.get("company_id"),
@@ -153,17 +175,24 @@ def build_financial_tools(user_id: str, company_id: str | None, context: ToolCon
 
     async def record_expense(**kwargs) -> str:
         args = RecordExpenseArgs.model_validate(kwargs)
-        if not args.confirmed:
-            return (
-                "Confirmation required before recording this expense. "
-                "Summarize the expense and ask the user to confirm."
-            )
-        payload = ExpenseCreate.model_validate(args.model_dump(exclude={"confirmed"}))
-        try:
-            expense = await context.business_client.create_expense(user_id, payload)
-        except BusinessClientError as exc:
-            return exc.message
-        return _json(expense.model_dump(mode="json"))
+        async def run(target_company_id: str) -> str:
+            payload_data = args.model_dump(exclude={"confirmed"})
+            payload_data["company_id"] = target_company_id
+            payload = ExpenseCreate.model_validate(payload_data)
+            if not args.confirmed:
+                return _json(
+                    {
+                        "message": "Confirmation required before recording this expense. Present this draft and ask the user to confirm.",
+                        "expense_draft": payload.model_dump(mode="json"),
+                    }
+                )
+            try:
+                expense = await context.business_client.create_expense(user_id, payload)
+            except BusinessClientError as exc:
+                return exc.message
+            return _json(expense.model_dump(mode="json"))
+
+        return await _with_scoped_company(company_id, args.company_id, "recording expenses", run)
 
     return [
         StructuredTool.from_function(
@@ -183,11 +212,11 @@ def build_financial_tools(user_id: str, company_id: str | None, context: ToolCon
             name="get_financial_summary",
             description=(
                 "Summarize invoice and expense totals, optionally grouped by category, counterparty, or month. "
-                "Use raw totals_by_currency for ordinary reporting. The response also includes BGN-converted "
-                "top-level totals for BGN-denominated regulation or threshold checks; EUR is converted with "
-                "1.00 EUR = 1.95583000 BGN."
+                "Use raw totals_by_currency for ordinary reporting in source currencies. The response also "
+                "includes EUR-denominated top-level totals for cross-currency comparison; use source totals "
+                "when users explicitly ask for native currency amounts."
             ),
-            args_schema=FinancialSummaryRequest,
+            args_schema=GetFinancialSummaryArgs,
         ),
         StructuredTool.from_function(
             coroutine=create_invoice,

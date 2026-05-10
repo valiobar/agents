@@ -4,11 +4,13 @@ from app.clients.business.base import _BusinessClientBase
 from app.models.financial import (
     ExpenseCreate,
     ExpenseFilters,
+    ExpenseListResponse,
     ExpenseResponse,
     FinancialSummaryRequest,
     FinancialSummaryResponse,
     InvoiceCreate,
     InvoiceFilters,
+    InvoiceListResponse,
     InvoiceResponse,
 )
 
@@ -21,10 +23,10 @@ class _FinancialClient(_BusinessClientBase):
         *,
         limit: int,
         offset: int = 0,
-    ) -> list[InvoiceResponse]:
+    ) -> InvoiceListResponse:
         params = filters.model_dump(mode="json", exclude_none=True) | {"limit": limit, "offset": offset}
         data = await self._request("GET", "/invoices", user_id, params=params)
-        return [InvoiceResponse.model_validate(item) for item in data]
+        return InvoiceListResponse.model_validate(data)
 
     async def create_invoice(self, user_id: str, payload: InvoiceCreate) -> InvoiceResponse:
         data = await self._request("POST", "/invoices", user_id, json=payload.model_dump(mode="json"))
@@ -37,10 +39,10 @@ class _FinancialClient(_BusinessClientBase):
         *,
         limit: int,
         offset: int = 0,
-    ) -> list[ExpenseResponse]:
+    ) -> ExpenseListResponse:
         params = filters.model_dump(mode="json", exclude_none=True) | {"limit": limit, "offset": offset}
         data = await self._request("GET", "/expenses", user_id, params=params)
-        return [ExpenseResponse.model_validate(item) for item in data]
+        return ExpenseListResponse.model_validate(data)
 
     async def create_expense(self, user_id: str, payload: ExpenseCreate) -> ExpenseResponse:
         data = await self._request("POST", "/expenses", user_id, json=payload.model_dump(mode="json"))

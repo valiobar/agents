@@ -24,12 +24,13 @@ from app.financial.models import (
     SummaryGroupBy,
 )
 from app.financial.repositories import (
-    EXCHANGE_RATES_TO_BGN,
+    EXCHANGE_RATES_TO_EUR,
+    BGN_PER_EUR,
     EUR_TO_BGN_RATE,
     ExpenseRepository,
     InvoiceRepository,
     bson_to_decimal,
-    convert_to_bgn,
+    convert_to_eur,
     date_to_datetime_range,
     decimal_to_bson,
     document_timestamps,
@@ -39,7 +40,8 @@ from app.financial.repositories import (
 
 __all__ = [
     "CurrencyCode",
-    "EXCHANGE_RATES_TO_BGN",
+    "EXCHANGE_RATES_TO_EUR",
+    "BGN_PER_EUR",
     "EUR_TO_BGN_RATE",
     "ExpenseCategory",
     "ExpenseCreate",
@@ -66,7 +68,7 @@ __all__ = [
     "MoneyModel",
     "SummaryGroupBy",
     "bson_to_decimal",
-    "convert_to_bgn",
+    "convert_to_eur",
     "date_to_datetime_range",
     "decimal_to_bson",
     "document_timestamps",

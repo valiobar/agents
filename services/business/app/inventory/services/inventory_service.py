@@ -335,6 +335,26 @@ class InventoryService:
 
         return movements
 
+    async def resolve_item_id_for_invoice_line(
+        self,
+        *,
+        user_id: str,
+        company_id: str,
+        description: str,
+    ) -> str | None:
+        await self.company_service.require_company(user_id, company_id)
+        normalized_description = description.strip()
+        if not normalized_description:
+            return None
+        match = await self.item_repo.find_best_match(
+            user_id=user_id,
+            company_id=company_id,
+            sku=None,
+            barcode=None,
+            description=normalized_description,
+        )
+        return match.id if match else None
+
     @staticmethod
     def _coerce_stock_quantity(line: dict[str, Any]) -> Decimal:
         quantity = line.get("stock_quantity")

@@ -8,6 +8,7 @@ from app.models.shared.agent import (
     ProviderName,
 )
 from app.models.shared.chat import ChatEvent, ChatRequest
+from app.models.common import ListEnvelope
 from app.models.financial.company import CompanyResponse
 from app.models.shared.conversation import (
     ConversationInDB,
@@ -17,12 +18,14 @@ from app.models.shared.conversation import (
 )
 from app.models.shared.document import DocumentResponse, DocumentStatus
 from app.models.financial import (
+    CompanyListResponse,
     CurrencyCode,
     ExpenseCategory,
     ExpenseCreate,
     ExpenseFilters,
     ExpenseItem,
     ExpenseItemCreate,
+    ExpenseListResponse,
     ExpenseResponse,
     ExpenseSourceDocumentType,
     FinancialSummaryBucket,
@@ -33,9 +36,11 @@ from app.models.financial import (
     InvoiceFilters,
     InvoiceItem,
     InvoiceItemCreate,
+    InvoiceListResponse,
     InvoiceResponse,
     InvoiceStatus,
     MoneyModel,
+    PartnerListResponse,
     SummaryGroupBy,
 )
 from app.models.financial.receipt import (
@@ -51,6 +56,23 @@ from app.models.financial.receipt import (
     ExtractedPartnerDraft,
     PartnerUpsertResult,
 )
+from app.models.document_intake import (
+    ClassifiedDocumentType,
+    ConfirmInventoryImportForExpenseRequest,
+    ConfirmInventoryImportForExpenseResponse,
+    DocumentClassification,
+    DocumentIntakeDraftResponse,
+    DocumentIntakeResponse,
+    ReceiptExpenseReviewResponse,
+    SupplierInvoiceExpenseReviewResponse,
+    SupplierInvoiceInventoryReviewResponse,
+    UnknownDocumentReviewResponse,
+)
+from app.models.inventory.import_previews import (
+    ImportSourceType,
+    InventoryImportPreviewCreate,
+    SupplierInvoiceLineCandidate,
+)
 
 __all__ = [
     "AgentConfig",
@@ -61,6 +83,7 @@ __all__ = [
     "AgentUpdate",
     "ChatEvent",
     "ChatRequest",
+    "ListEnvelope",
     "CompanyResponse",
     "ConversationInDB",
     "ConversationResponse",
@@ -70,11 +93,13 @@ __all__ = [
     "DocumentStatus",
     "ProviderName",
     "CurrencyCode",
+    "CompanyListResponse",
     "ExpenseCategory",
     "ExpenseCreate",
     "ExpenseFilters",
     "ExpenseItem",
     "ExpenseItemCreate",
+    "ExpenseListResponse",
     "ExpenseResponse",
     "ExpenseSourceDocumentType",
     "FinancialSummaryBucket",
@@ -85,9 +110,11 @@ __all__ = [
     "InvoiceFilters",
     "InvoiceItem",
     "InvoiceItemCreate",
+    "InvoiceListResponse",
     "InvoiceResponse",
     "InvoiceStatus",
     "MoneyModel",
+    "PartnerListResponse",
     "SummaryGroupBy",
     "ConfirmExtractedExpenseRequest",
     "ConfirmExtractedExpenseResponse",
@@ -100,4 +127,17 @@ __all__ = [
     "ReceiptCurrencyCode",
     "ReceiptExpenseCategory",
     "ReceiptExpenseSourceDocumentType",
+    "ClassifiedDocumentType",
+    "ConfirmInventoryImportForExpenseRequest",
+    "ConfirmInventoryImportForExpenseResponse",
+    "DocumentClassification",
+    "DocumentIntakeDraftResponse",
+    "DocumentIntakeResponse",
+    "ReceiptExpenseReviewResponse",
+    "SupplierInvoiceExpenseReviewResponse",
+    "SupplierInvoiceInventoryReviewResponse",
+    "UnknownDocumentReviewResponse",
+    "ImportSourceType",
+    "InventoryImportPreviewCreate",
+    "SupplierInvoiceLineCandidate",
 ]

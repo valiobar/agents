@@ -244,6 +244,276 @@ event: error
 data: {"message":"OPENAI_API_KEY is required for OpenAI agents"}
 ```
 
+### Document Intake Workflow
+
+```http
+POST /agents/{agent_id}/document-intake
+Content-Type: multipart/form-data
+```
+
+Uploads a document for Agent-orchestrated classification + review routing. Form fields:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `file` | file | Yes | PDF/image upload to classify and extract. |
+| `requested_type` | string | No | `auto` (default), `invoice`, or `receipt`. |
+
+```bash
+curl -X POST "http://localhost:8000/agents/$AGENT_ID/document-intake" \
+  -H "Authorization: Bearer $TOKEN" \
+  -F "requested_type=auto" \
+  -F "file=@./supplier-invoice.pdf;type=application/pdf"
+```
+
+Response `201 Created` returns one of four `type` variants:
+
+- `receipt_expense_review`
+- `supplier_invoice_inventory_review`
+- `supplier_invoice_expense_review`
+- `unknown_document_review`
+
+Shared review fields (when type is not `unknown_document_review`):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `classification` | object | Includes `document_type`, `confidence`, and `warnings`. |
+| `document` | object | Knowledge document metadata (`id`, `company_id`, `filename`, ...). |
+| `draft` | object | Extracted expense draft used by final confirmation. |
+| `extracted_text` | string or null | Optional extracted text. |
+| `provider` | string | LLM provider used for extraction. |
+| `model` | string | LLM model used for extraction. |
+| `extracted_at` | ISO datetime string | Extraction timestamp. |
+
+Supplier invoice with line items (`supplier_invoice_inventory_review`) includes:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `inventory_import_preview` | object | Business preview (`id`, `status`, `lines`, `company_id`, ...). |
+
+Unknown classification (`unknown_document_review`) includes:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `classification` | object | Classified type/confidence/warnings. |
+| `document` | object or null | Document metadata when available. |
+| `extracted_text` | string or null | Raw extracted text (optional). |
+| `warnings` | string[] | Workflow warnings. |
+
+Example `supplier_invoice_inventory_review` response:
+
+```json
+{
+  "type": "supplier_invoice_inventory_review",
+  "classification": {
+    "document_type": "supplier_invoice",
+    "confidence": 0.93,
+    "warnings": []
+  },
+  "document": {
+    "id": "666000000000000000000111",
+    "company_id": "666000000000000000000001",
+    "filename": "supplier-invoice.pdf",
+    "content_type": "application/pdf",
+    "size_bytes": 523441,
+    "status": "ready",
+    "chunk_count": 0,
+    "created_at": "2026-05-09T18:00:00Z",
+    "updated_at": "2026-05-09T18:00:04Z"
+  },
+  "draft": {
+    "counterparty": "Tech Supplier Ltd",
+    "expense_date": "2026-05-09",
+    "amount": "1200.00",
+    "currency": "EUR",
+    "category": "other",
+    "description": null,
+    "deductible": true,
+    "deductible_rate": "1.0",
+    "source_document_type": "invoice",
+    "source_document_id": "666000000000000000000111",
+    "source_document_number": "INV-9921",
+    "vendor_partner": {
+      "name": "Tech Supplier Ltd",
+      "registration_number": "BG123456789",
+      "vat_number": "BG123456789",
+      "city": "Sofia",
+      "country": "Bulgaria",
+      "address": "5 Industrial Blvd",
+      "accountable_person": "Elena Petrova",
+      "email": "office@techsupplier.bg",
+      "phone": null,
+      "confidence": 0.91,
+      "warnings": []
+    },
+    "items": [
+      {
+        "description": "Laptop stand",
+        "quantity": "10",
+        "unit_price": "50.00",
+        "unit_label": "pcs",
+        "sku": "LST-10",
+        "barcode": null,
+        "vat_rate": "0.20",
+        "category": "office"
+      }
+    ],
+    "confidence": 0.93,
+    "warnings": []
+  },
+  "extracted_text": null,
+  "provider": "openai",
+  "model": "gpt-4.1-mini",
+  "extracted_at": "2026-05-09T18:00:04Z",
+  "inventory_import_preview": {
+    "id": "666000000000000000000222",
+    "user_id": "666000000000000000000900",
+    "company_id": "666000000000000000000001",
+    "document_id": "666000000000000000000111",
+    "source_type": "supplier_invoice_upload",
+    "status": "draft",
+    "lines": [
+      {
+        "candidate": {
+          "description": "Laptop stand",
+          "sku": "LST-10",
+          "barcode": null,
+          "quantity": "10",
+          "unit": "pcs",
+          "unit_price": "50.00"
+        },
+        "matched_item_id": null,
+        "proposed_item": {
+          "company_id": "666000000000000000000001",
+          "sku": "LST-10",
+          "name": "Laptop stand",
+          "description": null,
+          "category": null,
+          "barcode": null,
+          "aliases": [],
+          "unit": "pcs",
+          "selling_price": null,
+          "reorder_point": null,
+          "target_stock_level": null,
+          "supplier_partner_id": null,
+          "is_active": true
+        },
+        "location_id": "666000000000000000000333",
+        "receipt_quantity": "10",
+        "warnings": []
+      }
+    ],
+    "created_at": "2026-05-09T18:00:04Z",
+    "updated_at": "2026-05-09T18:00:04Z"
+  }
+}
+```
+
+Supplier invoices with line items require two explicit approvals:
+
+1. Confirm inventory preview.
+2. Confirm final expense creation.
+
+Inventory continuation endpoint:
+
+```http
+POST /agents/{agent_id}/document-intake/supplier-invoice/inventory-imports/confirm
+Content-Type: application/json
+```
+
+```bash
+curl -X POST "http://localhost:8000/agents/$AGENT_ID/document-intake/supplier-invoice/inventory-imports/confirm" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "preview_id": "'"$PREVIEW_ID"'",
+    "draft": {
+      "counterparty": "Tech Supplier Ltd",
+      "expense_date": "2026-05-09",
+      "amount": "1200.00",
+      "currency": "EUR",
+      "category": "other",
+      "description": null,
+      "deductible": true,
+      "deductible_rate": "1.0",
+      "source_document_type": "invoice",
+      "source_document_id": "'"$DOCUMENT_ID"'",
+      "source_document_number": "INV-9921",
+      "vendor_partner": {
+        "name": "Tech Supplier Ltd",
+        "registration_number": "BG123456789",
+        "vat_number": "BG123456789",
+        "city": "Sofia",
+        "country": "Bulgaria",
+        "address": "5 Industrial Blvd",
+        "accountable_person": "Elena Petrova",
+        "email": "office@techsupplier.bg",
+        "phone": null,
+        "confidence": 0.91,
+        "warnings": []
+      },
+      "items": [],
+      "confidence": 0.93,
+      "warnings": []
+    }
+  }'
+```
+
+Response `201 Created` (`ConfirmInventoryImportForExpenseResponse`):
+
+```json
+{
+  "type": "supplier_invoice_expense_review",
+  "inventory_import_result": {
+    "preview_id": "666000000000000000000222",
+    "items_created": 1,
+    "items_updated": 0,
+    "movements_created": 1
+  },
+  "inventory_import_preview": {
+    "id": "666000000000000000000222",
+    "status": "confirmed",
+    "company_id": "666000000000000000000001",
+    "source_type": "supplier_invoice_upload",
+    "document_id": "666000000000000000000111",
+    "lines": [],
+    "created_at": "2026-05-09T18:00:04Z",
+    "updated_at": "2026-05-09T18:01:10Z",
+    "user_id": "666000000000000000000900"
+  },
+  "draft": {
+    "counterparty": "Tech Supplier Ltd",
+    "expense_date": "2026-05-09",
+    "amount": "1200.00",
+    "currency": "EUR",
+    "category": "other",
+    "description": null,
+    "deductible": true,
+    "deductible_rate": "1.0",
+    "source_document_type": "invoice",
+    "source_document_id": "666000000000000000000111",
+    "source_document_number": "INV-9921",
+    "vendor_partner": {
+      "name": "Tech Supplier Ltd",
+      "registration_number": "BG123456789",
+      "vat_number": "BG123456789",
+      "city": "Sofia",
+      "country": "Bulgaria",
+      "address": "5 Industrial Blvd",
+      "accountable_person": "Elena Petrova",
+      "email": "office@techsupplier.bg",
+      "phone": null,
+      "confidence": 0.91,
+      "warnings": []
+    },
+    "items": [],
+    "confidence": 0.93,
+    "warnings": []
+  }
+}
+```
+
+`POST /agents/{agent_id}/expenses/confirm` is still the final write step for expense persistence.
+
 ### List Conversations
 
 ```http

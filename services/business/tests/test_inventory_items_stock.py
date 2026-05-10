@@ -101,6 +101,16 @@ class InventoryItemStockAttachmentTests(unittest.IsolatedAsyncioTestCase):
             item_ids=["it-1"],
         )
 
+    async def test_list_items_forwards_search_filter_to_repo(self) -> None:
+        rows = [_item("it-1")]
+        svc = self._make_service(list_items=rows, stock_map={"it-1": Decimal("2")})
+        filters = InventoryItemFilters(company_id="c1", search="wid")
+
+        await svc.list_items("u1", filters, 20, 0)
+
+        svc.item_repo.count_by_filters.assert_awaited_once_with("u1", filters)
+        svc.item_repo.list_by_company.assert_awaited_once_with("u1", filters, 20, 0)
+
     async def test_list_categories_delegates_to_repo(self) -> None:
         expected = InventoryCategoryListResponse(
             total_category_count=2,

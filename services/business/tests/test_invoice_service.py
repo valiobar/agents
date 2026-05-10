@@ -96,6 +96,7 @@ class FakePartnerRepository:
 class FakeInventoryService:
     def __init__(self) -> None:
         self.issue_calls: list[dict[str, Any]] = []
+        self.resolve_calls: list[dict[str, str]] = []
 
     async def require_item_for_company(
         self,
@@ -127,8 +128,39 @@ class FakeInventoryService:
             }
         )
 
+    async def resolve_item_id_for_invoice_line(
+        self,
+        *,
+        user_id: str,
+        company_id: str,
+        description: str,
+    ) -> str | None:
+        await sleep(0)
+        self.resolve_calls.append(
+            {
+                "user_id": user_id,
+                "company_id": company_id,
+                "description": description,
+            }
+        )
+        if "monitor" in description.lower():
+            return "resolved-item-1"
+        return None
 
-def _payload(status: str) -> InvoiceCreate:
+
+def _payload(status: str, *, include_inventory_link: bool = True) -> InvoiceCreate:
+    item: dict[str, Any] = {
+        "description": "BlueGrid 27-inch IPS Monitor Standard",
+        "quantity": Decimal("2"),
+        "unit_label": "pcs",
+        "unit_price": Decimal("100"),
+        "vat_rate": Decimal("0.20"),
+        "category": "peripherals",
+        "stock_quantity": Decimal("2"),
+    }
+    if include_inventory_link:
+        item["inventory_item_id"] = "item-1"
+        item["inventory_location_id"] = "location-1"
     return InvoiceCreate(
         company_id="company-1",
         partner_id=None,
@@ -149,19 +181,7 @@ def _payload(status: str) -> InvoiceCreate:
         payment_method="bank_transfer",
         currency="EUR",
         status=status,  # type: ignore[arg-type]
-        items=[
-            {
-                "description": "BlueGrid 27-inch IPS Monitor Standard",
-                "quantity": Decimal("2"),
-                "unit_label": "pcs",
-                "unit_price": Decimal("100"),
-                "vat_rate": Decimal("0.20"),
-                "category": "peripherals",
-                "inventory_item_id": "item-1",
-                "inventory_location_id": "location-1",
-                "stock_quantity": Decimal("2"),
-            }
-        ],
+        items=[item],
     )
 
 
@@ -194,6 +214,28 @@ class InvoiceServiceStockIssueTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(created.status, "draft")
         self.assertEqual(inventory_service.issue_calls, [])
+
+    async def test_create_invoice_resolves_missing_inventory_item_id_before_issuing_stock(self) -> None:
+        inventory_service = FakeInventoryService()
+        service = InvoiceService(
+            repo=FakeInvoiceRepository(),
+            company_service=FakeCompanyService(),
+            partner_repo=FakePartnerRepository(),
+            inventory_service=inventory_service,
+        )
+
+        created = await service.create_invoice(
+            "user-1",
+            _payload("sent", include_inventory_link=False),
+        )
+
+        self.assertEqual(created.items[0].inventory_item_id, "resolved-item-1")
+        self.assertEqual(len(inventory_service.issue_calls), 1)
+        self.assertEqual(
+            inventory_service.issue_calls[0]["lines"][0]["inventory_item_id"],
+            "resolved-item-1",
+        )
+        self.assertEqual(len(inventory_service.resolve_calls), 1)
 
 
 if __name__ == "__main__":

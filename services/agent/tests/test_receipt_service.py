@@ -58,6 +58,8 @@ class FakeBusinessClient:
         return ExpenseResponse(
             id="expense-1",
             user_id=user_id,
+            company_id=payload.company_id,
+            partner_id=payload.partner_id,
             counterparty=payload.counterparty,
             expense_date=payload.expense_date,
             amount=payload.amount or Decimal("1.00"),

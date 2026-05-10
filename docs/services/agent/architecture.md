@@ -18,6 +18,7 @@ The Agent Service owns agent instances, chat runtime orchestration, conversation
 - Runtime lifecycle hooks for controlled agent-specific input/tool/event/chunk/final-output transformations.
 - Development-only agent loop logging with provider-reported token metadata tracing when available.
 - RAG access through the Knowledge Base Service `POST /retrieve` endpoint.
+- Document intake workflow orchestration via `POST /agents/{agent_id}/document-intake`.
 - Safe arithmetic calculations through a restricted calculator tool.
 - Business HTTP access for company validation, partner lookup/write, invoice and expense query/write, inventory workflows, and financial summary aggregation.
 - Structured financial query and write tools over Business Service contracts.
@@ -57,6 +58,12 @@ clients/
 services/
   agent_service.py
   chat_service.py
+  document_intake_service.py
+  document_workflows/
+    base.py
+    receipt.py
+    supplier_invoice.py
+    unknown.py
   conversation_service.py
   companybook_service.py
 repositories/
@@ -64,6 +71,7 @@ repositories/
   conversation_repo.py
   usage_repo.py
 models/
+  document_intake.py
   agent.py
   chat.py
   conversation.py
@@ -127,6 +135,12 @@ If the runtime exposes `route_metadata`, `ChatService` emits an optional `route`
 
 Three agent types are currently valid: `"accountant"`, `"inventory"`, and `"router"`. The Accountant Agent can list and resolve companies, query invoices, query expenses, summarize financial records, search/create partners, search CompanyBook.BG for Bulgarian companies, import a selected registry company as a partner, create invoices, and record expenses. The Inventory Agent can search inventory items, check stock levels, list low-stock items, view movement history, create/update items, record stock movements, and review/confirm/cancel supplier invoice import previews. The Router Agent delegates finance and inventory turns to compatible specialist runtimes and handles general turns with a no-tool fallback. Accountant and inventory write tools require explicit user confirmation before `confirmed=true` is sent to the tool.
 
+Accountant list/search tools return envelope-shaped payloads (`total_count`, `returned_count`, `offset`, `limit`, `truncated`, `next_offset`, `items`), and prompt guidance requires treating `truncated=true` as incomplete results.
+
+`resolve_partner_by_name` now returns ranked candidates with `match_type`, `score`, and `match_reasons`, which the runtime uses to avoid weak silent partner selection.
+
+Financial summaries expose EUR-denominated top-level totals (`currency="EUR"`, `exchange_rates_to_eur`) while preserving source-currency totals in `totals_by_currency`.
+
 Router child selection is exact-scope and user-scoped. `ChatService` first looks for linked delegate documents via `parent_agent_id` and `delegate_role`, then falls back to the latest same-user, same-company specialist agent for compatibility. The public agent schema does not yet include typed delegate fields or hide delegate documents from list responses; router creation currently does not auto-provision hidden delegates.
 
 ## Business Service Boundary
@@ -138,8 +152,30 @@ Agent consumes Business Service in these places:
 - `AgentService` validates non-null `company_id` values during create, update, and company-filtered list operations through `GET /companies/{company_id}/exists`.
 - Accountant tools use `BusinessClient` for company listing/resolution, partner lookup/write, invoice and expense query/write, and financial summary calls.
 - Inventory tools use `BusinessClient` for inventory item CRUD, stock level queries, movement recording, location listing, inventory search, and import preview lifecycle.
+- `DocumentIntakeService` uses `BusinessClient` for supplier invoice import preview create/confirm/get during the two-stage approval flow.
 
 `BusinessClient` is backed by a long-lived `httpx.AsyncClient` created during FastAPI lifespan startup. It forwards `x-user-id` on every request and normalizes Business HTTP/transport failures into `BusinessClientError`.
+
+## Document Intake Workflow
+
+The Agent Service owns document-intake orchestration and approval sequencing:
+
+- `POST /agents/{agent_id}/document-intake` accepts multipart `file` plus `requested_type` (`auto`, `invoice`, `receipt`) and returns a discriminated `DocumentIntakeResponse`.
+- `POST /agents/{agent_id}/document-intake/supplier-invoice/inventory-imports/confirm` confirms inventory import preview changes and returns `supplier_invoice_expense_review`.
+- `POST /agents/{agent_id}/expenses/confirm` remains the only path that records an expense.
+
+`DocumentIntakeResponse` variants:
+
+- `receipt_expense_review`
+- `supplier_invoice_inventory_review`
+- `supplier_invoice_expense_review`
+- `unknown_document_review`
+
+Ownership boundaries are explicit:
+
+- Knowledge classifies/extracts draft data only.
+- Agent validates extraction output and routes deterministic workflows.
+- Business writes inventory and expenses only when explicit approval endpoints are called.
 
 ## CompanyBook.BG Integration
 
@@ -159,6 +195,8 @@ Required configuration:
 | `COMPANYBOOK_TIMEOUT_SECONDS` | `10.0` | Per-request timeout for search and detail calls. |
 
 The integration does not store raw CompanyBook financial data or documents. It persists only the user-selected partner fields required by the existing partner model. Partner imports first search Business partners by exact UIC, then create through Business Service; duplicate-key races are resolved by searching the partner by UIC again. If CompanyBook omits required invoice recipient fields (`city`, `address`, `accountable_person`, etc.), the tool returns `missing_fields` and `partner_draft` so the agent asks the user only for the missing details.
+
+`search_companybook_companies` returns the same pagination envelope fields as local search/list tools (`total_count`, `returned_count`, `offset`, `limit`, `truncated`, `next_offset`, `items`) plus `"source": "companybook"` for provenance.
 
 CompanyBook calls are made from Agent Service tool execution, not from the frontend or gateway. Gateway rate limiting still limits the chat request stream, but CompanyBook API quota behavior is owned by CompanyBook; HTTP `429` responses are normalized into a user-facing "try again later" message.
 

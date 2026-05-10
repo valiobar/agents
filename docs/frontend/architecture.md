@@ -273,7 +273,7 @@ graph LR
         AuthSvc[Auth Service]
         AgentSvcCompanies[Agent Service -- Companies/Partners]
         AgentSvcCRUD[Agent Service -- Agent CRUD]
-        AgentSvcChat[Agent Service -- Chat]
+        AgentSvcChat[Agent Service -- Chat + Document Intake]
         BusinessSvcFin[Business Service -- Invoices/Expenses]
         BusinessSvcInv[Business Service -- Inventory]
         KBSvc[Knowledge Base Service]
@@ -341,7 +341,7 @@ graph LR
 | Auth Service | `entities/user` + `features/auth/*` |
 | Agent Service (Companies/Partners) | `entities/company` + `entities/partner` + `features/create-company` + `features/update-company` + `features/create-partner` + `features/update-partner` + `widgets/company-table` + `widgets/partner-table` |
 | Agent Service (CRUD) | `entities/agent` + `features/create-agent` + `features/update-agent` |
-| Agent Service (Chat) | `entities/conversation` + `features/send-message` + `widgets/chat-window` |
+| Agent Service (Chat + Document Intake) | `entities/conversation` + `features/send-message` + `widgets/chat-window` |
 | Business Service (Invoices/Expenses) | `entities/invoice` + `features/create-invoice` + `features/download-invoice-pdf` + `widgets/invoice-table` + `entities/expense` + `features/record-expense` + `widgets/expense-table` |
 | Business Service (Inventory) | `entities/inventory` + `features/create-inventory-item` + `features/record-stock-movement` + `features/inventory-import-review` + `widgets/inventory-table` + `widgets/low-stock-panel` + `widgets/import-preview-table` |
 | Knowledge Base Service | `features/upload-document` using selected `company_id` |
@@ -442,7 +442,7 @@ export function useCreateInvoice() {
 
 ### 2. Streaming State -- useReducer + SSE Hook
 
-Chat token streaming via SSE needs a dedicated state machine scoped to the chat window. Tokens arrive at high frequency and must be appended to a buffer, then committed as a complete message when the stream ends. This is not server state (ephemeral, not cached) and not simple UI state (has complex transitions).
+Chat token streaming via SSE needs a dedicated state machine scoped to the chat window. Tokens arrive at high frequency and must be appended to a buffer, then committed as a complete message when the stream ends. The same reducer also owns upload-review workflow phases for document intake (`receipt_expense_review`, `supplier_invoice_inventory_review`, `supplier_invoice_expense_review`, `unknown_document_review`). This is not server state (ephemeral, not cached) and not simple UI state (has complex transitions).
 
 A `useReducer` scoped to `widgets/chat-window/` handles this:
 
@@ -494,6 +494,8 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
 ```
 
 When streaming completes, the finalized message is also written to the TanStack Query cache (conversation history) so it persists across navigations without a refetch. Chat history is scoped by the agent's selected company: `widgets/chat-window` opens in a fresh state (no implicit latest-history restore), fetches scoped conversation summaries for the history menu via `GET /conversations?agent_id=...&company_id=...&limit=20`, and loads full history only when the user explicitly selects a conversation. `shared/store/chat-store.ts` keeps the currently opened conversation id by `agentId:companyId`.
+
+Document uploads in the same chat widget call `POST /agents/{agent_id}/document-intake` with `requested_type`. Supplier invoices with extracted item lines require two explicit actions in order: confirm inventory preview through `POST /agents/{agent_id}/document-intake/supplier-invoice/inventory-imports/confirm`, then confirm the expense through `POST /agents/{agent_id}/expenses/confirm`.
 
 The generic SSE parser in `shared/api/sse.ts` uses `fetch()` with `Accept: text/event-stream`, which allows authenticated POST streams to `POST /agents/{id}/chat`. The parser accepts `conversation`, `start`, `token`, `route`, `done`, and `error` events and skips unknown event names. The chat widget dispatches visible actions for token/error/done events and tolerates router `route` metadata without adding a visible message.
 

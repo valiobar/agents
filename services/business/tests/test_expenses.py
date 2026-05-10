@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from app.common.models import ListEnvelope, make_list_envelope
 from app.dependencies import get_expense_service
 from app.main import app
 from app.financial.models import ExpenseCreate, ExpenseFilters, ExpenseInDB
@@ -30,6 +31,8 @@ class FakeExpenseService:
         self.created = ExpenseInDB(
             id="expense-1",
             user_id=user_id,
+            company_id=payload.company_id,
+            partner_id=payload.partner_id,
             counterparty=payload.counterparty,
             expense_date=payload.expense_date,
             amount=payload.amount or Decimal("1.00"),
@@ -52,6 +55,13 @@ class FakeExpenseService:
         await sleep(0)
         return [self.created] if self.created else []
 
+    async def list_expenses_envelope(
+        self, user_id: str, filters: ExpenseFilters, limit: int, offset: int
+    ) -> ListEnvelope[ExpenseInDB]:
+        await sleep(0)
+        items = [self.created] if self.created else []
+        return make_list_envelope(items=items, total_count=len(items), offset=offset, limit=limit)
+
     async def get_expense(self, user_id: str, expense_id: str) -> ExpenseInDB:
         await sleep(0)
         assert self.created is not None
@@ -73,6 +83,7 @@ class ExpenseRouteContractTests(unittest.TestCase):
             "/expenses",
             headers=headers,
             json={
+                "company_id": "company-1",
                 "counterparty": "Office Store",
                 "expense_date": "2026-04-27",
                 "amount": "24.00",
@@ -85,9 +96,9 @@ class ExpenseRouteContractTests(unittest.TestCase):
         self.assertEqual(create_response.status_code, 201)
         self.assertEqual(create_response.json()["source_document_number"], "R-839201")
 
-        list_response = self.client.get("/expenses?limit=10", headers=headers)
+        list_response = self.client.get("/expenses?company_id=company-1&limit=10", headers=headers)
         self.assertEqual(list_response.status_code, 200)
-        self.assertEqual(list_response.json()[0]["source_document_number"], "R-839201")
+        self.assertEqual(list_response.json()["items"][0]["source_document_number"], "R-839201")
 
         get_response = self.client.get("/expenses/expense-1", headers=headers)
         self.assertEqual(get_response.status_code, 200)

@@ -5,6 +5,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.models.common import ListEnvelope
+
 _ALLOWED_LOGO_TYPES = {"image/png", "image/jpeg", "image/webp", "image/gif"}
 _MAX_LOGO_BYTES = 256 * 1024
 
@@ -68,3 +70,6 @@ class CompanyResponse(BaseModel):
     @classmethod
     def validate_logo(cls, value: str | None) -> str | None:
         return _validate_logo_data_url(value)
+
+
+CompanyListResponse = ListEnvelope[CompanyResponse]

@@ -1,5 +1,11 @@
 import type { Message } from "@/entities/conversation/model/types";
-import type { ExpenseDraft } from "@/entities/expense/model/types";
+import type {
+  ConfirmInventoryImportForExpenseResponse,
+  DocumentIntakeResponse,
+  ExpenseDraft,
+  UnknownDocumentReviewResponse,
+} from "@/entities/expense/model/types";
+import type { InventoryImportPreview } from "@/entities/inventory/model/types";
 import type { ToolTracePayload } from "@/shared/api/sse";
 
 export interface ChatState {
@@ -7,9 +13,21 @@ export interface ChatState {
   streamingContent: string;
   status: "idle" | "streaming" | "error";
   error: string | null;
-  expenseDraftStatus: "idle" | "loading" | "ready" | "confirming" | "confirmed" | "error";
+  documentReviewStatus:
+    | "idle"
+    | "loading"
+    | "receipt_expense_ready"
+    | "supplier_inventory_ready"
+    | "supplier_expense_ready"
+    | "unknown_ready"
+    | "confirming_inventory"
+    | "confirming_expense"
+    | "confirmed"
+    | "error";
   expenseDraft: ExpenseDraft | null;
-  expenseDraftError: string | null;
+  inventoryImportPreview: InventoryImportPreview | null;
+  unknownDocumentReview: UnknownDocumentReviewResponse | null;
+  documentReviewError: string | null;
   toolTraces: ToolTracePayload[];
 }
 
@@ -20,12 +38,22 @@ export type ChatAction =
   | { type: "STREAM_TOKEN"; payload: string }
   | { type: "STREAM_COMPLETE" }
   | { type: "STREAM_ERROR"; payload: string }
-  | { type: "EXPENSE_DRAFT_LOADING" }
-  | { type: "EXPENSE_DRAFT_READY"; payload: ExpenseDraft }
-  | { type: "EXPENSE_DRAFT_ERROR"; payload: string }
-  | { type: "TOOL_TRACE"; payload: ToolTracePayload }
-  | { type: "EXPENSE_DRAFT_CLEAR" }
+  | { type: "DOCUMENT_INTAKE_LOADING" }
+  | { type: "DOCUMENT_INTAKE_READY"; payload: DocumentIntakeResponse }
+  | { type: "DOCUMENT_INTAKE_ERROR"; payload: string }
+  | { type: "INVENTORY_IMPORT_CONFIRMING" }
+  | { type: "INVENTORY_IMPORT_CONFIRMATION_FAILED"; payload: string }
+  | { type: "INVENTORY_IMPORT_CONFIRMED_FOR_EXPENSE"; payload: ConfirmInventoryImportForExpenseResponse }
   | { type: "EXPENSE_CONFIRMING" }
+  | {
+      type: "EXPENSE_CONFIRMATION_FAILED";
+      payload: {
+        draft: ExpenseDraft;
+        fallbackStatus: "receipt_expense_ready" | "supplier_expense_ready";
+      };
+    }
+  | { type: "TOOL_TRACE"; payload: ToolTracePayload }
+  | { type: "DOCUMENT_REVIEW_CLEAR" }
   | {
       type: "APPEND_ASSISTANT_MESSAGE";
       payload: { content: string; metadata?: Record<string, unknown>; createdAt?: string };
@@ -44,9 +72,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         streamingContent: "",
         status: "idle",
         error: null,
-        expenseDraftStatus: "idle",
+        documentReviewStatus: "idle",
         expenseDraft: null,
-        expenseDraftError: null,
+        inventoryImportPreview: null,
+        unknownDocumentReview: null,
+        documentReviewError: null,
         toolTraces: [],
       };
     case "RESET":
@@ -55,13 +85,15 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         streamingContent: "",
         status: "idle",
         error: null,
-        expenseDraftStatus: "idle",
+        documentReviewStatus: "idle",
         expenseDraft: null,
-        expenseDraftError: null,
+        inventoryImportPreview: null,
+        unknownDocumentReview: null,
+        documentReviewError: null,
         toolTraces: [],
       };
     case "SEND_MESSAGE": {
-      const clearConfirmedDraft = state.expenseDraftStatus === "confirmed";
+      const clearConfirmedDraft = state.documentReviewStatus === "confirmed";
       return {
         ...state,
         messages: [
@@ -78,9 +110,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         error: null,
         ...(clearConfirmedDraft
           ? {
-              expenseDraftStatus: "idle" as const,
+              documentReviewStatus: "idle" as const,
               expenseDraft: null,
-              expenseDraftError: null,
+              inventoryImportPreview: null,
+              unknownDocumentReview: null,
+              documentReviewError: null,
             }
           : {}),
       };
@@ -115,44 +149,113 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         status: "error",
         error: action.payload,
       };
-    case "EXPENSE_DRAFT_LOADING":
+    case "DOCUMENT_INTAKE_LOADING":
       return {
         ...state,
-        expenseDraftStatus: "loading",
+        documentReviewStatus: "loading",
         expenseDraft: null,
-        expenseDraftError: null,
+        inventoryImportPreview: null,
+        unknownDocumentReview: null,
+        documentReviewError: null,
+      };
+    case "DOCUMENT_INTAKE_READY":
+      if (action.payload.type === "supplier_invoice_inventory_review") {
+        return {
+          ...state,
+          documentReviewStatus: "supplier_inventory_ready",
+          expenseDraft: action.payload.draft,
+          inventoryImportPreview: action.payload.inventory_import_preview,
+          unknownDocumentReview: null,
+          documentReviewError: null,
+        };
+      }
+
+      if (action.payload.type === "supplier_invoice_expense_review") {
+        return {
+          ...state,
+          documentReviewStatus: "supplier_expense_ready",
+          expenseDraft: action.payload.draft,
+          inventoryImportPreview: null,
+          unknownDocumentReview: null,
+          documentReviewError: null,
+        };
+      }
+
+      if (action.payload.type === "unknown_document_review") {
+        return {
+          ...state,
+          documentReviewStatus: "unknown_ready",
+          expenseDraft: null,
+          inventoryImportPreview: null,
+          unknownDocumentReview: action.payload,
+          documentReviewError: null,
+        };
+      }
+
+      return {
+        ...state,
+        documentReviewStatus: "receipt_expense_ready",
+        expenseDraft: action.payload.draft,
+        inventoryImportPreview: null,
+        unknownDocumentReview: null,
+        documentReviewError: null,
+      };
+    case "DOCUMENT_INTAKE_ERROR":
+      return {
+        ...state,
+        documentReviewStatus: "error",
+        expenseDraft: null,
+        inventoryImportPreview: null,
+        unknownDocumentReview: null,
+        documentReviewError: action.payload,
+      };
+    case "INVENTORY_IMPORT_CONFIRMING":
+      return {
+        ...state,
+        documentReviewStatus: "confirming_inventory",
+        documentReviewError: null,
+      };
+    case "INVENTORY_IMPORT_CONFIRMATION_FAILED":
+      return {
+        ...state,
+        documentReviewStatus: "supplier_inventory_ready",
+        documentReviewError: action.payload,
+      };
+    case "INVENTORY_IMPORT_CONFIRMED_FOR_EXPENSE":
+      return {
+        ...state,
+        documentReviewStatus: "supplier_expense_ready",
+        expenseDraft: action.payload.draft,
+        inventoryImportPreview: null,
+        unknownDocumentReview: null,
+        documentReviewError: null,
       };
     case "EXPENSE_CONFIRMING":
       return {
         ...state,
-        expenseDraftStatus: "confirming",
-        expenseDraftError: null,
-      };
-    case "EXPENSE_DRAFT_READY":
-      return {
-        ...state,
-        expenseDraftStatus: "ready",
-        expenseDraft: action.payload,
-        expenseDraftError: null,
-      };
-    case "EXPENSE_DRAFT_ERROR":
-      return {
-        ...state,
-        expenseDraftStatus: "error",
-        expenseDraft: null,
-        expenseDraftError: action.payload,
+        documentReviewStatus: "confirming_expense",
+        documentReviewError: null,
       };
     case "TOOL_TRACE":
       return {
         ...state,
         toolTraces: [...state.toolTraces, action.payload].slice(-50),
       };
-    case "EXPENSE_DRAFT_CLEAR":
+    case "EXPENSE_CONFIRMATION_FAILED":
       return {
         ...state,
-        expenseDraftStatus: "idle",
+        documentReviewStatus: action.payload.fallbackStatus,
+        expenseDraft: action.payload.draft,
+        documentReviewError: null,
+      };
+    case "DOCUMENT_REVIEW_CLEAR":
+      return {
+        ...state,
+        documentReviewStatus: "idle",
         expenseDraft: null,
-        expenseDraftError: null,
+        inventoryImportPreview: null,
+        unknownDocumentReview: null,
+        documentReviewError: null,
       };
     case "APPEND_ASSISTANT_MESSAGE":
       return {
@@ -179,8 +282,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             metadata: { kind: "expense_confirmation" },
           },
         ],
-        expenseDraftStatus: "confirmed",
-        expenseDraftError: null,
+        documentReviewStatus: "confirmed",
+        documentReviewError: null,
       };
     default:
       return state;

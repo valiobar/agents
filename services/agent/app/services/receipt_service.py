@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from fastapi import HTTPException, UploadFile, status
 
 from app.clients.business import BusinessClient, BusinessClientError
 from app.clients.knowledge import KnowledgeClient, KnowledgeClientError
+from app.models.document_intake import (
+    ReceiptExpenseReviewResponse,
+    SupplierInvoiceExpenseReviewResponse,
+)
 from app.models.financial import ExpenseCreate
 from app.models.financial.receipt import ConfirmExtractedExpenseRequest, ConfirmExtractedExpenseResponse, ExpenseDraftResponse
 from app.repositories.agent_repo import AgentRepository
+from app.services.document_intake_service import require_company_scoped_agent
+
+if TYPE_CHECKING:
+    from app.services.document_intake_service import DocumentIntakeService
 
 
 class ReceiptService:
@@ -15,31 +25,23 @@ class ReceiptService:
         agent_repo: AgentRepository,
         knowledge_client: KnowledgeClient,
         business_client: BusinessClient,
+        document_intake_service: DocumentIntakeService | None = None,
     ) -> None:
         self.agent_repo = agent_repo
         self.knowledge_client = knowledge_client
         self.business_client = business_client
+        self.document_intake_service = document_intake_service
 
     async def _require_company_scoped_agent(self, user_id: str, agent_id: str) -> str:
-        agent = await self.agent_repo.get_by_id(user_id, agent_id)
-        if agent is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
-        if not agent.company_id:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Receipt workflow requires a company-scoped agent",
-            )
-        try:
-            exists = await self.business_client.company_exists(user_id, agent.company_id)
-        except BusinessClientError as exc:
-            if exc.status_code == status.HTTP_404_NOT_FOUND:
-                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found") from exc
-            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=exc.message) from exc
-        if not exists:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
-        return agent.company_id
+        return await require_company_scoped_agent(
+            user_id=user_id,
+            agent_id=agent_id,
+            agent_repo=self.agent_repo,
+            business_client=self.business_client,
+            workflow_name="Receipt workflow",
+        )
 
-    async def create_draft(
+    async def _create_legacy_draft(
         self,
         *,
         user_id: str,
@@ -48,7 +50,6 @@ class ReceiptService:
         source_document_type: str,
     ) -> ExpenseDraftResponse:
         company_id = await self._require_company_scoped_agent(user_id, agent_id)
-
         try:
             return await self.knowledge_client.create_expense_draft(
                 user_id=user_id,
@@ -63,6 +64,49 @@ class ReceiptService:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=exc.message,
             ) from exc
+
+    async def create_draft(
+        self,
+        *,
+        user_id: str,
+        agent_id: str,
+        file: UploadFile,
+        source_document_type: str,
+    ) -> ExpenseDraftResponse:
+        if self.document_intake_service is None or source_document_type != "receipt":
+            return await self._create_legacy_draft(
+                user_id=user_id,
+                agent_id=agent_id,
+                file=file,
+                source_document_type=source_document_type,
+            )
+
+        intake_response = await self.document_intake_service.create_intake(
+            user_id=user_id,
+            agent_id=agent_id,
+            file=file,
+            requested_type=source_document_type,
+        )
+        if isinstance(
+            intake_response,
+            ReceiptExpenseReviewResponse | SupplierInvoiceExpenseReviewResponse,
+        ):
+            return ExpenseDraftResponse(
+                document=intake_response.document,
+                draft=intake_response.draft,
+                extracted_text=intake_response.extracted_text,
+                provider=intake_response.provider,
+                model=intake_response.model,
+                extracted_at=intake_response.extracted_at,
+            )
+
+        await file.seek(0)
+        return await self._create_legacy_draft(
+            user_id=user_id,
+            agent_id=agent_id,
+            file=file,
+            source_document_type=source_document_type,
+        )
 
     async def confirm_expense(
         self,

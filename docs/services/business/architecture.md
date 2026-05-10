@@ -7,17 +7,22 @@ The Business Service is the structured-data microservice for the Agent Platform.
 ## Implemented Responsibilities
 
 - User-scoped company CRUD and default company handling.
+- Company list query support (`query`) across normalized name/registration/VAT fields.
 - Company-scoped partner CRUD and search.
 - Invoice creation with supplier/recipient snapshots, line total calculation, invoice numbering, and status transition rules.
 - Expense creation with item total calculation and deductible amount calculation.
+- Company-scoped expense create/list with optional same-company `partner_id` linkage.
 - MongoDB filtering for invoices and expenses by common reporting fields.
 - Financial summary aggregation by category, counterparty, or month.
+- Envelope pagination contract for company/partner/invoice/expense list endpoints.
+- Ranked partner resolution via `POST /partners/resolve` with candidate scores and match reasons.
 - Inventory item CRUD with SKU uniqueness per company, aliases, and search text composition.
 - Inventory location CRUD with company-level default location support.
 - Append-only stock movement ledger for receipts, issues, adjustments, transfers, and returns.
 - Derived stock level aggregation from movements and multi-layer inventory search (SKU/barcode/alias/text/prefix).
 - Supplier invoice import preview lifecycle with draft review, confirm, and cancel flows.
 - Invoice-to-inventory integration: stock issue on `draft -> sent` transition for linked invoice lines.
+- Agent-orchestrated document-intake writes: inventory changes only on preview confirm and expenses only on explicit expense create/confirm calls.
 - Internal company ownership validation for Agent and Knowledge through `/companies/{company_id}/exists`.
 - Startup index creation for all Business-owned collections.
 
@@ -142,6 +147,7 @@ Business centralizes cross-domain dependencies internally so external services c
 
 - `financial/services/invoice_service.py` depends on `company` and `partner` domains for ownership/snapshot validation and on `inventory` for stock issuing when an invoice transitions from `draft` to `sent`.
 - `inventory/services/*` depends on `company` domain ownership checks so inventory writes are always company-scoped.
+- Agent's `DocumentIntakeService` calls Business through HTTP for `/inventory/import-previews` create/confirm/get and final `/expenses` persistence; Business does not import Agent workflow code.
 - These are in-service dependencies only; Agent and Knowledge use Business via HTTP contracts rather than importing Business modules.
 
 ## Request Context
@@ -213,9 +219,15 @@ Allowed status transitions:
 
 ## Expense Rules
 
-Expense creation requires a counterparty, expense date, category, and either `amount` or item lines.
+Expense creation requires `company_id`, a counterparty, expense date, category, and either `amount` or item lines.
 
 If item lines are provided, Business calculates the stored amount from the item totals. If a single amount is provided, Business stores that amount directly.
+
+`partner_id` is optional for expenses. When supplied, it must belong to the same `company_id`.
+
+Legacy expenses without `company_id` are excluded from company-scoped reports until backfilled. Use:
+
+`python scripts/migrations/backfill_expense_company_id.py --dry-run`
 
 Deductible amount is calculated as:
 
@@ -227,7 +239,9 @@ When `deductible=false`, Business stores `deductible_amount = 0.00`.
 
 ## Financial Summary Rules
 
-Financial summaries combine invoice and expense aggregations. Invoices can be filtered by `company_id`, `partner_id`, and date range. Expenses are currently user-scoped and date-filtered for summary aggregation.
+Financial summaries combine invoice and expense aggregations. Invoices and expenses are company-scoped for filtering and aggregation.
+
+`partner_id` filtering requires `company_id` so Business can validate partner ownership unambiguously.
 
 Supported grouping:
 
@@ -238,7 +252,38 @@ Supported grouping:
 | `month` | `issue_date` formatted as `YYYY-MM` | `expense_date` formatted as `YYYY-MM` |
 | omitted | `all` | `all` |
 
-The response contains per-currency totals and top-level converted totals. `BGN` and `EUR` can be converted with the configured rate `1.00 EUR = 1.95583000 BGN`; unsupported currencies are listed in `unsupported_currencies`.
+The response always returns top-level totals in EUR (`currency="EUR"`), plus source-currency totals in `totals_by_currency` and per-bucket `totals_by_currency`. Conversion metadata is returned as `exchange_rates_to_eur`; unsupported currencies are listed in `unsupported_currencies` and excluded from EUR aggregate totals.
+
+## List Envelope Contract
+
+Company, partner, invoice, and expense list routes return the shared envelope:
+
+```json
+{
+  "total_count": 42,
+  "returned_count": 20,
+  "offset": 0,
+  "limit": 20,
+  "truncated": true,
+  "next_offset": 20,
+  "items": []
+}
+```
+
+`truncated=true` means more data exists and callers must use `next_offset` to continue pagination.
+
+## Search Normalization And Backfill
+
+Business stores normalized search fields for exact/prefix matching:
+
+- `companies`: `name_normalized`, `registration_number_normalized`, `vat_number_normalized`, `search_text`
+- `partners`: `name_normalized`, `registration_number_normalized`, `vat_number_normalized`, `search_text`
+- `invoices`: `counterparty_normalized`
+- `expenses`: `counterparty_normalized`
+
+Indexes for these fields are created at startup. Existing rows can be backfilled with:
+
+`python scripts/migrations/backfill_search_normalized_fields.py`
 
 ## Inventory Rules
 

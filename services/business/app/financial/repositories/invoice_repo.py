@@ -7,6 +7,7 @@ from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import ReturnDocument
 
+from app.common.search import normalize_search_text
 from app.financial.models import FinancialSummaryRequest, InvoiceFilters, InvoiceInDB
 from app.financial.repositories.financial_utils import (
     bson_to_decimal,
@@ -84,6 +85,7 @@ class InvoiceRepository:
         if doc.get("due_date") and not isinstance(doc["due_date"], datetime):
             doc["due_date"] = date_to_datetime_range(doc["due_date"])
 
+        doc["counterparty_normalized"] = normalize_search_text(doc.get("counterparty"))
         doc.update({"created_at": now, "updated_at": now})
         stored = decimal_to_bson(doc)
         result = await self.collection.insert_one(stored)
@@ -119,7 +121,14 @@ class InvoiceRepository:
         if filters.status:
             query["status"] = filters.status
         if filters.counterparty:
-            query["counterparty"] = {"$regex": re.escape(filters.counterparty), "$options": "i"}
+            normalized_counterparty = normalize_search_text(filters.counterparty)
+            if normalized_counterparty:
+                escaped_counterparty = re.escape(normalized_counterparty)
+                query["$or"] = [
+                    {"counterparty_normalized": normalized_counterparty},
+                    {"counterparty_normalized": {"$regex": f"^{escaped_counterparty}"}},
+                    {"counterparty_normalized": {"$regex": escaped_counterparty}},
+                ]
         if filters.category:
             query["items.category"] = filters.category
         self._apply_date_filter(query, filters)
@@ -136,6 +145,9 @@ class InvoiceRepository:
             .limit(limit)
         )
         return [self._to_model(doc) async for doc in cursor]
+
+    async def count_by_user(self, user_id: str, filters: InvoiceFilters) -> int:
+        return int(await self.collection.count_documents(self._build_filter(user_id, filters)))
 
     async def get_by_id(self, user_id: str, invoice_id: str) -> InvoiceInDB | None:
         if not ObjectId.is_valid(invoice_id):
@@ -163,6 +175,8 @@ class InvoiceRepository:
             update["issue_date"] = date_to_datetime_range(update["issue_date"])
         if "due_date" in update and update["due_date"] and not isinstance(update["due_date"], datetime):
             update["due_date"] = date_to_datetime_range(update["due_date"])
+        if "counterparty" in update:
+            update["counterparty_normalized"] = normalize_search_text(update.get("counterparty"))
 
         update["updated_at"] = datetime.now(timezone.utc)
         doc = await self.collection.find_one_and_update(

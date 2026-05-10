@@ -74,6 +74,109 @@ export const expenseDraftSchema = z.object({
   warnings: z.array(z.string()).default([]),
 });
 
+export const documentClassificationSchema = z.object({
+  document_type: z.enum([
+    "receipt",
+    "supplier_invoice",
+    "contract",
+    "csv_inventory_import",
+    "json_data_import",
+    "unknown",
+  ]),
+  confidence: z.number().min(0).max(1),
+  warnings: z.array(z.string()).default([]),
+});
+
+export const intakeDocumentSchema = z.object({
+  id: z.string().min(1),
+  company_id: z.string().min(1),
+  filename: z.string().min(1),
+  content_type: z.string().min(1),
+  size_bytes: z.number().int().nonnegative(),
+  status: z.enum(["processing", "ready", "failed", "deleted"]),
+  chunk_count: z.number().int().nonnegative(),
+  created_at: z.string().min(1),
+  updated_at: z.string().min(1),
+});
+
+export const expenseDraftResponseSchema = z.object({
+  document: intakeDocumentSchema,
+  draft: expenseDraftSchema,
+  extracted_text: z.string().nullable().optional(),
+  provider: z.string().min(1),
+  model: z.string().min(1),
+  extracted_at: z.string().min(1),
+});
+
+const inventoryItemCreateSchema = z.object({
+  company_id: z.string().min(1),
+  sku: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string().nullable().optional(),
+  category: z.string().nullable().optional(),
+  barcode: z.string().nullable().optional(),
+  aliases: z.array(z.string()).optional(),
+  unit: z.string().min(1),
+  selling_price: decimalStringSchema.nullable().optional(),
+  reorder_point: decimalStringSchema.nullable().optional(),
+  target_stock_level: decimalStringSchema.nullable().optional(),
+  supplier_partner_id: z.string().nullable().optional(),
+  is_active: z.boolean().optional(),
+});
+
+const supplierInvoiceLineCandidateSchema = z.object({
+  description: z.string().min(1).max(500),
+  sku: z.string().nullable(),
+  barcode: z.string().nullable(),
+  quantity: decimalStringSchema,
+  unit: z.string().nullable(),
+  unit_price: decimalStringSchema.nullable(),
+});
+
+const inventoryImportPreviewLineSchema = z.object({
+  candidate: supplierInvoiceLineCandidateSchema,
+  matched_item_id: z.string().nullable(),
+  proposed_item: inventoryItemCreateSchema.nullable(),
+  location_id: z.string().min(1),
+  receipt_quantity: decimalStringSchema,
+  warnings: z.array(z.string()).default([]),
+});
+
+const inventoryImportPreviewSchema = z.object({
+  id: z.string().min(1),
+  user_id: z.string().min(1),
+  company_id: z.string().min(1),
+  document_id: z.string().nullable(),
+  source_type: z.enum(["supplier_invoice_upload", "agent"]),
+  status: z.enum(["draft", "confirmed", "cancelled"]),
+  lines: z.array(inventoryImportPreviewLineSchema),
+  created_at: z.string().min(1),
+  updated_at: z.string().min(1),
+});
+
+export const documentIntakeResponseSchema = z.discriminatedUnion("type", [
+  expenseDraftResponseSchema.extend({
+    type: z.literal("receipt_expense_review"),
+    classification: documentClassificationSchema,
+  }),
+  expenseDraftResponseSchema.extend({
+    type: z.literal("supplier_invoice_expense_review"),
+    classification: documentClassificationSchema,
+  }),
+  expenseDraftResponseSchema.extend({
+    type: z.literal("supplier_invoice_inventory_review"),
+    classification: documentClassificationSchema,
+    inventory_import_preview: inventoryImportPreviewSchema,
+  }),
+  z.object({
+    type: z.literal("unknown_document_review"),
+    classification: documentClassificationSchema,
+    document: intakeDocumentSchema.nullable(),
+    extracted_text: z.string().nullable(),
+    warnings: z.array(z.string()).default([]),
+  }),
+]);
+
 export const confirmExtractedExpenseInputSchema = expenseDraftSchema
   .extend({
     confirmed: z.literal(true),

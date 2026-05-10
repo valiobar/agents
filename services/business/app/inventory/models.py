@@ -121,6 +121,7 @@ class InventoryItemFilters(BaseModel):
     company_id: str
     category: str | None = None
     is_active: bool | None = None
+    search: str | None = None
     sku: str | None = None
     barcode: str | None = None
 

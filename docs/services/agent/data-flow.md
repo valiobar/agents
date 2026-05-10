@@ -73,6 +73,47 @@ sequenceDiagram
 
 Companies represent invoice issuer profiles. Partners represent reusable clients, suppliers, or both under one company. These routes are no longer mounted by Agent Service. Gateway preserves the public URLs and routes them to Business Service. Agent consumes the same data only through `BusinessClient`.
 
+## Document Intake Flow
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Gateway
+    participant Agent
+    participant Knowledge
+    participant Business
+
+    Client->>Gateway: POST /agents/{agent_id}/document-intake (multipart file + requested_type)
+    Gateway->>Gateway: validate JWT and inject x-user-id
+    Gateway->>Agent: proxy to Agent Service
+    Agent->>Business: GET /companies/{company_id}/exists + x-user-id
+    Business-->>Agent: company exists true/false
+    Agent->>Knowledge: POST /documents/expense-draft (compatibility intake extraction)
+    Knowledge-->>Agent: classified extraction draft
+    Agent->>Agent: route deterministic workflow by document type
+    alt receipt or supplier invoice without line items
+        Agent-->>Gateway: receipt_expense_review or supplier_invoice_expense_review
+        Gateway-->>Client: review response
+    else supplier invoice with line items
+        Agent->>Business: POST /inventory/import-previews + x-user-id
+        Business-->>Agent: InventoryImportPreviewResponse
+        Agent-->>Gateway: supplier_invoice_inventory_review
+        Gateway-->>Client: review inventory response
+        Client->>Gateway: POST /agents/{agent_id}/document-intake/supplier-invoice/inventory-imports/confirm
+        Gateway->>Agent: proxy with x-user-id
+        Agent->>Business: POST /inventory/import-previews/{preview_id}/confirm
+        Agent->>Business: GET /inventory/import-previews/{preview_id}
+        Business-->>Agent: InventoryImportResult + confirmed preview
+        Agent-->>Gateway: supplier_invoice_expense_review
+        Gateway-->>Client: expense review continuation
+    else unknown
+        Agent-->>Gateway: unknown_document_review
+        Gateway-->>Client: manual review response
+    end
+```
+
+Knowledge extracts and classifies only. Agent routes and enforces approval order. Business remains the only writer for inventory and expense records.
+
 ## Chat Streaming Flow
 
 ```mermaid
@@ -208,11 +249,13 @@ sequenceDiagram
     KB->>Chroma: search global_tax and user collection
     KB->>Mongo: read document metadata as needed
     KB-->>Tool: chunks with scores and metadata
-    Tool-->>Executor: compact context text
+    Tool-->>Executor: "RAG source summary" metadata + formatted chunks
     Executor->>Runtime: final response chunks
 ```
 
 The Agent Service never calls ChromaDB directly. RAG retrieval remains owned by the Knowledge Base Service. Assigned agents send their `company_id` so uploaded chunks are filtered by company; unassigned agents set `include_user_documents=false` and use shared `global_tax` only.
+
+`rag_search` prepends a compact `RAG source summary` JSON header with `retrieved_count`, `collections`, `documents`, `top_score`, `user_documents_requested`, and `user_documents_included` so the model can qualify evidence provenance without replacing chunk content.
 
 ## Business-Backed Financial Tool Flow
 
@@ -237,11 +280,17 @@ sequenceDiagram
 
 Financial records are available from Business REST endpoints and Accountant Agent tools. Business Service owns calculations, filters, company ownership, user scoping, persistence, and summary aggregation. Agent owns only tool argument validation, company-scope enforcement for assigned agents, and conversion of Business responses into compact tool output.
 
+Read/list tools (`list_companies`, `search_partners`, `query_invoices`, `query_expenses`, and `search_companybook_companies`) return envelope payloads with `total_count`, `returned_count`, `offset`, `limit`, `truncated`, `next_offset`, and `items`. Runtime prompt rules require treating `truncated=true` as incomplete and using `next_offset` only when the user asks to continue.
+
+`resolve_partner_by_name` returns Business-ranked candidates with `match_type`, `score`, and `match_reasons`; tool consumers should show ambiguity to the user instead of auto-selecting weak matches.
+
 Money values are modeled as `Decimal` in shared Pydantic schemas and sent to Business as JSON strings. Business stores them in MongoDB as BSON `Decimal128` and serializes responses as strings.
 
 Invoice creation in Agent tools resolves the company scope and waits for explicit confirmation, then Business validates `company_id`, verifies that `partner_id` belongs to the same company when present, calculates totals, and stores immutable `supplier_snapshot` and `recipient_snapshot` values for historical PDF rendering.
 
 The write tools `create_invoice` and `record_expense` require `confirmed=true`. Without confirmation, they return a confirmation-required message and do not call Business. Partner and invoice tools also require the current agent to be assigned to a company or a resolved `company_id` to be supplied.
+
+Expense tools are company-scoped: assigned agents inject their configured company automatically, and unassigned agents must resolve/pass `company_id` explicitly.
 
 ## CompanyBook Partner Import Flow
 
@@ -277,7 +326,7 @@ sequenceDiagram
     end
 ```
 
-`search_companybook_companies` is read-only and should be used after local partner search, or when the user explicitly asks to search the Bulgarian registry. `import_companybook_partner` is company-scoped: assigned agents use their assigned `company_id`, while unassigned agents must resolve and pass a `company_id` before import.
+`search_companybook_companies` is read-only and should be used after local partner search, or when the user explicitly asks to search the Bulgarian registry. It returns the shared envelope fields plus `"source": "companybook"`. `import_companybook_partner` is company-scoped: assigned agents use their assigned `company_id`, while unassigned agents must resolve and pass a `company_id` before import.
 
 The import tool reuses existing partners by exact UIC before making a new write. If another request creates the same partner between lookup and insert, Business returns a conflict and the tool resolves the partner by UIC again. If the registry detail is incomplete, no partner is written; the returned `partner_draft` contains all mapped fields and `missing_fields` tells the agent which specific values to request from the user.
 

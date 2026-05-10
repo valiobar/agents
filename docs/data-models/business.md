@@ -234,12 +234,14 @@ Indexes created on startup:
 
 ## `expenses` Collection
 
-Stores user-scoped expense records. Expenses may be invoice-backed or receipt-backed, and can be recorded with either a single amount or optional item lines.
+Stores company-scoped expense records. Expenses may be invoice-backed or receipt-backed, and can be recorded with either a single amount or optional item lines.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `_id` | ObjectId | Yes | MongoDB primary key. Public API exposes this as `id`. |
 | `user_id` | string | Yes | Gateway-authenticated owner id. Every query filters by this field. |
+| `company_id` | string | Yes for new records | Owning company id used for scoped filtering and summaries. |
+| `partner_id` | string or null | No | Optional linked partner id in the same company. |
 | `counterparty` | string | Yes | Vendor or payee name, 1-200 characters. |
 | `expense_date` | datetime | Yes | Expense date stored as a UTC datetime. API response exposes a date. |
 | `amount` | Decimal128 | Yes | Stored expense amount. Calculated from items when item lines are provided. |
@@ -287,10 +289,43 @@ Indexes created on startup:
 
 | Index | Purpose |
 |-------|---------|
-| `(user_id ASC, category ASC, expense_date DESC)` | Filter expenses by category and list newest first. |
-| `(user_id ASC, expense_date DESC)` | User-scoped date-range lists and summaries. |
-| `(user_id ASC, counterparty ASC)` | User-scoped counterparty filters. |
-| `(user_id ASC, deductible ASC)` | Deductibility filters. |
+| `(user_id ASC, company_id ASC, expense_date DESC)` | Company-scoped date-range lists and summaries. |
+| `(user_id ASC, company_id ASC, category ASC, expense_date DESC)` | Company-scoped category filtering. |
+| `(user_id ASC, company_id ASC, partner_id ASC)` | Partner-scoped expense filtering and summaries. |
+| `(user_id ASC, company_id ASC, counterparty ASC)` | Company-scoped counterparty filters. |
+| `(user_id ASC, company_id ASC, deductible ASC)` | Company-scoped deductibility filters. |
+
+### Legacy Backfill: Missing `company_id`
+
+Older rows may still have missing or `null` `company_id` from the previous user-scoped contract. New writes are validated to require `company_id`, and company-scoped list/summary flows do not include legacy rows until they are assigned.
+
+Run this one-time backfill script:
+
+```bash
+python scripts/migrations/backfill_expense_company_id.py --report-path scripts/migrations/reports/backfill_expense_company_id_report.json
+```
+
+Backfill behavior:
+
+- Auto-assign `company_id` only when the owning user has exactly one company.
+- Leave ambiguous users unchanged (`0` companies or `>1` companies).
+- Write a JSON report with `ambiguous_users` for manual follow-up.
+- Use `--dry-run` first to preview updates and ambiguity count.
+
+### Search Normalization Backfill
+
+Normalized search fields are indexed for fast exact/prefix lookups:
+
+- `companies`: `name_normalized`, `registration_number_normalized`, `vat_number_normalized`, `search_text`
+- `partners`: `name_normalized`, `registration_number_normalized`, `vat_number_normalized`, `search_text`
+- `invoices`: `counterparty_normalized`
+- `expenses`: `counterparty_normalized`
+
+For legacy rows created before these fields existed, run:
+
+```bash
+python scripts/migrations/backfill_search_normalized_fields.py
+```
 
 ## `counters` Collection
 
@@ -308,6 +343,22 @@ Indexes created on startup:
 | `(_id ASC)` unique | Atomic lookup and increment for sequence counters. |
 
 ## API Shapes
+
+List endpoints (`GET /companies`, `GET /partners`, `GET /invoices`, `GET /expenses`) return a shared envelope:
+
+```json
+{
+  "total_count": 123,
+  "returned_count": 20,
+  "offset": 0,
+  "limit": 20,
+  "truncated": true,
+  "next_offset": 20,
+  "items": []
+}
+```
+
+`truncated=true` means additional rows are available and callers should continue with `next_offset`.
 
 `InvoiceResponse`:
 
@@ -384,6 +435,8 @@ Indexes created on startup:
 
 ```json
 {
+  "company_id": "665f1f77c9e0f7a8093bb701",
+  "partner_id": null,
   "counterparty": "Office Store",
   "expense_date": "2026-04-26",
   "amount": "24.00",
@@ -407,17 +460,43 @@ Indexes created on startup:
 
 ```json
 {
+  "currency": "EUR",
+  "exchange_rates_to_eur": {
+    "EUR": "1",
+    "BGN": "0.51129188"
+  },
   "invoice_total": "120.00",
   "expense_total": "24.00",
   "deductible_expense_total": "24.00",
   "net_total": "96.00",
+  "totals_by_currency": [
+    {
+      "currency": "EUR",
+      "invoice_total": "120.00",
+      "expense_total": "24.00",
+      "deductible_expense_total": "24.00",
+      "net_total": "96.00"
+    }
+  ],
+  "unsupported_currencies": [],
   "buckets": [
     {
       "key": "2026-04",
       "invoice_total": "120.00",
       "expense_total": "24.00",
-      "deductible_expense_total": "24.00"
+      "deductible_expense_total": "24.00",
+      "totals_by_currency": [
+        {
+          "currency": "EUR",
+          "invoice_total": "120.00",
+          "expense_total": "24.00",
+          "deductible_expense_total": "24.00",
+          "net_total": "96.00"
+        }
+      ]
     }
   ]
 }
 ```
+
+When `partner_id` is supplied in summary requests, `company_id` is required so ownership can be validated.

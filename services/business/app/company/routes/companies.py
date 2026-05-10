@@ -4,11 +4,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
 
+from app.common.models import ListEnvelope
 from app.dependencies import get_company_service, get_user_id
 from app.company.models import CompanyCreate, CompanyResponse, CompanyUpdate
 from app.company.services.company_service import CompanyService
 
 router = APIRouter(prefix="/companies", tags=["companies"])
+CompanyListResponse = ListEnvelope[CompanyResponse]
 
 
 @router.post("", response_model=CompanyResponse, status_code=status.HTTP_201_CREATED)
@@ -21,15 +23,24 @@ async def create_company(
     return CompanyResponse.model_validate(company)
 
 
-@router.get("", response_model=list[CompanyResponse])
+@router.get("", response_model=CompanyListResponse)
 async def list_companies(
     user_id: Annotated[str, Depends(get_user_id)],
     service: Annotated[CompanyService, Depends(get_company_service)],
+    query: Annotated[str | None, Query(max_length=200)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 50,
     offset: Annotated[int, Query(ge=0)] = 0,
 ):
-    companies = await service.list_companies(user_id, limit, offset)
-    return [CompanyResponse.model_validate(company) for company in companies]
+    result = await service.list_companies_envelope(user_id, limit, offset, query=query)
+    return CompanyListResponse(
+        total_count=result.total_count,
+        returned_count=result.returned_count,
+        offset=result.offset,
+        limit=result.limit,
+        truncated=result.truncated,
+        next_offset=result.next_offset,
+        items=[CompanyResponse.model_validate(company) for company in result.items],
+    )
 
 
 @router.get("/{company_id}", response_model=CompanyResponse)

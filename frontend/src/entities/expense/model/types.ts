@@ -14,6 +14,31 @@ export type ExpenseCategory =
 
 export type ExpenseSourceDocumentType = "invoice" | "receipt";
 export type ExpenseDraftRequestSourceDocumentType = "auto" | ExpenseSourceDocumentType;
+export type ClassifiedDocumentType =
+  | "receipt"
+  | "supplier_invoice"
+  | "contract"
+  | "csv_inventory_import"
+  | "json_data_import"
+  | "unknown";
+
+export interface DocumentClassification {
+  document_type: ClassifiedDocumentType;
+  confidence: number;
+  warnings: string[];
+}
+
+export interface IntakeDocumentResponse {
+  id: string;
+  company_id: string;
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  status: "processing" | "ready" | "failed" | "deleted";
+  chunk_count: number;
+  created_at: string;
+  updated_at: string;
+}
 
 export interface ExtractedExpenseItem {
   description: string;
@@ -59,22 +84,49 @@ export interface ExpenseDraft {
 }
 
 export interface ExpenseDraftResponse {
-  document: {
-    id: string;
-    company_id: string;
-    filename: string;
-    content_type: string;
-    size_bytes: number;
-    status: "processing" | "ready" | "failed";
-    chunk_count: number;
-    created_at: string;
-    updated_at: string;
-  };
+  document: IntakeDocumentResponse;
   draft: ExpenseDraft;
   extracted_text?: string | null;
   provider: string;
   model: string;
   extracted_at: string;
+}
+
+export interface ReceiptExpenseReviewResponse extends ExpenseDraftResponse {
+  type: "receipt_expense_review";
+  classification: DocumentClassification;
+}
+
+export interface SupplierInvoiceExpenseReviewResponse extends ExpenseDraftResponse {
+  type: "supplier_invoice_expense_review";
+  classification: DocumentClassification;
+}
+
+export interface SupplierInvoiceInventoryReviewResponse extends ExpenseDraftResponse {
+  type: "supplier_invoice_inventory_review";
+  classification: DocumentClassification;
+  inventory_import_preview: import("@/entities/inventory/model/types").InventoryImportPreview;
+}
+
+export interface UnknownDocumentReviewResponse {
+  type: "unknown_document_review";
+  classification: DocumentClassification;
+  document: IntakeDocumentResponse | null;
+  extracted_text: string | null;
+  warnings: string[];
+}
+
+export type DocumentIntakeResponse =
+  | ReceiptExpenseReviewResponse
+  | SupplierInvoiceExpenseReviewResponse
+  | SupplierInvoiceInventoryReviewResponse
+  | UnknownDocumentReviewResponse;
+
+export interface ConfirmInventoryImportForExpenseResponse {
+  type: "supplier_invoice_expense_review";
+  inventory_import_result: import("@/entities/inventory/model/types").InventoryImportResult;
+  inventory_import_preview: import("@/entities/inventory/model/types").InventoryImportPreview;
+  draft: ExpenseDraft;
 }
 
 export interface Expense {

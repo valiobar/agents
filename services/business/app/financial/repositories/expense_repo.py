@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from bson import ObjectId
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from app.common.search import normalize_search_text
 from app.financial.models import ExpenseFilters, ExpenseInDB, FinancialSummaryRequest
 from app.financial.repositories.financial_utils import (
     bson_to_decimal,
@@ -26,6 +27,8 @@ class ExpenseRepository:
         return ExpenseInDB(
             id=str(doc["_id"]),
             user_id=doc["user_id"],
+            company_id=doc["company_id"],
+            partner_id=doc.get("partner_id"),
             counterparty=doc["counterparty"],
             expense_date=expense_dt.date() if isinstance(expense_dt, datetime) else expense_dt,
             amount=doc["amount"],
@@ -48,17 +51,32 @@ class ExpenseRepository:
         if "expense_date" in doc and not isinstance(doc["expense_date"], datetime):
             doc["expense_date"] = date_to_datetime_range(doc["expense_date"])
 
+        doc["counterparty_normalized"] = normalize_search_text(doc.get("counterparty"))
         doc.update({"created_at": now, "updated_at": now})
         result = await self.collection.insert_one(decimal_to_bson(doc))
         doc["_id"] = result.inserted_id
         return self._to_model(doc)
 
+    def _apply_counterparty_filter(self, query: dict, counterparty: str | None) -> None:
+        if not counterparty:
+            return
+        normalized_counterparty = normalize_search_text(counterparty)
+        if not normalized_counterparty:
+            return
+        escaped_counterparty = re.escape(normalized_counterparty)
+        query["$or"] = [
+            {"counterparty_normalized": normalized_counterparty},
+            {"counterparty_normalized": {"$regex": f"^{escaped_counterparty}"}},
+            {"counterparty_normalized": {"$regex": escaped_counterparty}},
+        ]
+
     def _build_filter(self, user_id: str, filters: ExpenseFilters) -> dict:
-        query: dict = {"user_id": user_id}
+        query: dict = {"user_id": user_id, "company_id": filters.company_id}
+        if filters.partner_id:
+            query["partner_id"] = filters.partner_id
         if filters.category:
             query["category"] = filters.category
-        if filters.counterparty:
-            query["counterparty"] = {"$regex": re.escape(filters.counterparty), "$options": "i"}
+        self._apply_counterparty_filter(query, filters.counterparty)
         if filters.deductible is not None:
             query["deductible"] = filters.deductible
         if filters.date_from or filters.date_to:
@@ -86,6 +104,9 @@ class ExpenseRepository:
         )
         return [self._to_model(doc) async for doc in cursor]
 
+    async def count_by_user(self, user_id: str, filters: ExpenseFilters) -> int:
+        return int(await self.collection.count_documents(self._build_filter(user_id, filters)))
+
     async def get_by_id(self, user_id: str, expense_id: str) -> ExpenseInDB | None:
         if not ObjectId.is_valid(expense_id):
             return None
@@ -94,6 +115,10 @@ class ExpenseRepository:
 
     def _summary_match(self, user_id: str, request: FinancialSummaryRequest) -> dict:
         match: dict = {"user_id": user_id}
+        if request.company_id:
+            match["company_id"] = request.company_id
+        if request.partner_id:
+            match["partner_id"] = request.partner_id
         if request.date_from or request.date_to:
             match["expense_date"] = {}
             if request.date_from:

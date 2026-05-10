@@ -11,7 +11,7 @@ from types import SimpleNamespace
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.clients.business import BusinessClientError
-from app.models.financial.partner import PartnerResponse
+from app.models.financial.partner import PartnerListResponse, PartnerResponse
 from app.tools.financial import build_partner_tools
 from app.tools.financial.operations import build_partner_tools as build_partner_tools_ops
 from app.tools.financial.partner_tools import build_partner_tools as build_partner_tools_split
@@ -40,6 +40,8 @@ class FakeBusinessClient:
     def __init__(self) -> None:
         self.create_calls = 0
         self.existing: list[PartnerResponse] = []
+        self.last_list_offset: int | None = None
+        self.last_list_limit: int | None = None
 
     async def list_partners(
         self,
@@ -49,9 +51,20 @@ class FakeBusinessClient:
         query: str | None,
         limit: int,
         offset: int,
-    ) -> list[PartnerResponse]:
+    ) -> PartnerListResponse:
         await sleep(0)
-        return self.existing
+        self.last_list_offset = offset
+        self.last_list_limit = limit
+        window = self.existing[offset : offset + limit]
+        return PartnerListResponse(
+            total_count=len(self.existing),
+            returned_count=len(window),
+            offset=offset,
+            limit=limit,
+            truncated=offset + len(window) < len(self.existing),
+            next_offset=offset + len(window) if offset + len(window) < len(self.existing) else None,
+            items=window,
+        )
 
     async def create_partner(self, user_id: str, payload: object) -> PartnerResponse:
         await sleep(0)
@@ -87,6 +100,26 @@ class PartnerToolTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(json.loads(result)["id"], "partner-1")
         self.assertEqual(business_client.create_calls, 1)
+
+    async def test_search_partners_returns_envelope_and_forwards_offset(self) -> None:
+        business_client = FakeBusinessClient()
+        business_client.existing = [_partner("111111111"), _partner("222222222"), _partner("333333333")]
+        context = SimpleNamespace(business_client=business_client)
+        search_tool = next(
+            tool for tool in build_partner_tools("user-1", "company-1", context) if tool.name == "search_partners"
+        )
+
+        result = await search_tool.ainvoke({"query": "example", "limit": 1, "offset": 1})
+        payload = json.loads(result)
+
+        self.assertEqual(payload["total_count"], 3)
+        self.assertEqual(payload["returned_count"], 1)
+        self.assertEqual(payload["offset"], 1)
+        self.assertTrue(payload["truncated"])
+        self.assertEqual(payload["next_offset"], 2)
+        self.assertEqual(payload["items"][0]["registration_number"], "222222222")
+        self.assertEqual(business_client.last_list_limit, 1)
+        self.assertEqual(business_client.last_list_offset, 1)
 
 
 if __name__ == "__main__":

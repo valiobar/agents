@@ -271,6 +271,17 @@ class InventoryItemRepository:
             query["category"] = filters.category
         if filters.is_active is not None:
             query["is_active"] = filters.is_active
+        if filters.search:
+            normalized_search = normalize_text(filters.search)
+            raw_search = filters.search.strip()
+            if normalized_search and raw_search:
+                escaped_search = re.escape(raw_search)
+                escaped_normalized = re.escape(normalized_search)
+                query[_MONGO_OR] = [
+                    {"name": {_MONGO_REGEX: escaped_search, _MONGO_OPTIONS: "i"}},
+                    {"sku": {_MONGO_REGEX: escaped_search, _MONGO_OPTIONS: "i"}},
+                    {"search_text": {_MONGO_REGEX: escaped_normalized, _MONGO_OPTIONS: "i"}},
+                ]
         if filters.sku:
             query["sku"] = filters.sku
         if filters.barcode:

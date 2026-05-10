@@ -31,6 +31,7 @@ export interface InventoryItem {
   target_stock_level: string | null;
   supplier_partner_id: string | null;
   is_active: boolean;
+  available_in_stock?: string | null;
   created_at: string;
   updated_at: string;
 }

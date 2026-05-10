@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 from langchain_core.tools import StructuredTool
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.clients.business import BusinessClientError
 from app.models.financial.company import CompanyResponse
@@ -11,12 +11,14 @@ from app.runtime.tool_context import ToolContext
 
 
 class ListCompaniesArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     query: str | None = Field(
         default=None,
         max_length=200,
         description="Optional company name or registration number search term.",
     )
     limit: int = Field(default=20, ge=1, le=50)
+    offset: int = Field(default=0, ge=0, le=10_000)
 
     @field_validator("query", mode="before")
     @classmethod
@@ -27,6 +29,7 @@ class ListCompaniesArgs(BaseModel):
 
 
 class ResolveCompanyArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     name: str = Field(
         min_length=1,
         max_length=200,
@@ -43,35 +46,40 @@ def _company_payload(company: CompanyResponse) -> dict:
     return company.model_dump(mode="json", exclude={"logo_data_url"})
 
 
-def _company_matches(company: CompanyResponse, query: str) -> bool:
-    value = query.casefold()
-    return value in company.name.casefold() or value in company.registration_number.casefold()
-
-
 def build_company_tools(user_id: str, context: ToolContext) -> list[StructuredTool]:
     async def list_companies(**kwargs) -> str:
         args = ListCompaniesArgs.model_validate(kwargs)
         try:
-            companies = await context.business_client.list_companies(user_id, limit=args.limit, offset=0)
+            companies = await context.business_client.list_companies(
+                user_id,
+                query=args.query,
+                limit=args.limit,
+                offset=args.offset,
+            )
         except BusinessClientError as exc:
             return exc.message
-        if args.query:
-            companies = [company for company in companies if _company_matches(company, args.query)]
-        return _json([_company_payload(company) for company in companies])
+        payload = companies.model_dump(mode="json")
+        payload["items"] = [_company_payload(company) for company in companies.items]
+        return _json(payload)
 
     async def resolve_company_by_name(**kwargs) -> str:
         args = ResolveCompanyArgs.model_validate(kwargs)
         try:
-            companies = await context.business_client.list_companies(user_id, limit=100, offset=0)
+            companies = await context.business_client.list_companies(
+                user_id,
+                query=args.name,
+                limit=args.max_matches,
+                offset=0,
+            )
         except BusinessClientError as exc:
             return exc.message
         exact_matches = [
             company
-            for company in companies
+            for company in companies.items
             if company.name.casefold() == args.name.casefold()
             or company.registration_number.casefold() == args.name.casefold()
         ]
-        matches = exact_matches or [company for company in companies if _company_matches(company, args.name)]
+        matches = exact_matches or companies.items
         matches = matches[: args.max_matches]
 
         if not matches:

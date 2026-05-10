@@ -8,6 +8,7 @@ A microservice platform for creating and orchestrating AI agents. Users log in, 
 > **Phase 2 Knowledge Base complete** — document ingestion, MongoDB metadata, ChromaDB vectors, OpenAI embeddings, and retrieval are implemented.
 > **Phase 3 Agent Service core complete** — agent CRUD, conversation persistence, provider factory, Accountant, Inventory, and Router runtimes, RAG/calculator/date tools, Business-backed tools, and SSE chat streaming are implemented.
 > **Business Service split active** — companies, partners, invoices, expenses, inventory, financial summaries, and their MongoDB indexes are owned by the Business Service. Gateway keeps the public URLs stable while routing `/companies`, `/partners`, `/invoices`, `/expenses`, and `/inventory/*` to Business.
+> **Document intake workflow complete** — Agent owns `POST /agents/{agent_id}/document-intake` orchestration and supplier-invoice two-stage approval, Knowledge performs classify/extract only, and Business performs inventory/expense writes only after explicit confirmations.
 > **Company-scoped workflows complete** — Business owns companies and partners; agents, invoices, expenses, and document uploads can be scoped by company; invoices snapshot supplier/recipient parties; Knowledge Base user uploads/retrieval are company-scoped; and the Accountant Agent can import Bulgarian partners from CompanyBook.BG before invoice creation.
 > Remaining Orchestrator work is planned. Features marked with *(planned)* are not yet built.
 
@@ -112,7 +113,7 @@ All traffic from the frontend enters through the API Gateway. The gateway valida
 The Business Service split is active. Gateway preserves the public API shape but routes domain prefixes to Business, while Agent keeps runtime prefixes:
 
 - Business Service owns `/companies`, `/partners`, `/invoices`, `/expenses`, internal `/financial-summary`, and the MongoDB indexes for those collections.
-- Agent Service owns `/agents`, `/conversations`, SSE chat streaming, provider selection, RAG adapter usage, CompanyBook lookup orchestration, and tool orchestration.
+- Agent Service owns `/agents`, `/conversations`, `/agents/{agent_id}/document-intake`, supplier-invoice inventory-confirm continuation, SSE chat streaming, provider selection, RAG adapter usage, CompanyBook lookup orchestration, and tool orchestration.
 - Gateway owns prefix routing only; it must not gain domain logic.
 - Agent tools call Business over internal HTTP through a long-lived `httpx.AsyncClient`, so REST APIs and chat tools share the same Business validation and persistence rules.
 
@@ -228,6 +229,14 @@ graph TD
 **Unstructured data** (tax regulations, company policies) is stored as vector embeddings in ChromaDB by the implemented Knowledge Base Service. The Agent Service queries it through `POST /retrieve` when the model invokes `rag_search`. Assigned agents include their `company_id` so uploaded-document results come only from that company; unassigned agents still use shared `global_tax` context.
 
 **Structured business data** (companies, partners, invoices, expenses, inventory, and financial summaries) is stored in MongoDB by the Business Service. The Accountant Agent can query invoices and expenses, summarize totals, search/create partners, import Bulgarian partners from CompanyBook.BG, create invoices, and record expenses through tools that call Business over internal HTTP. The Inventory Agent can search inventory, inspect stock, manage items/locations/movements, and review import previews through Business-backed tools.
+
+Business list routes for companies, partners, invoices, and expenses now share one envelope contract: `total_count`, `returned_count`, `offset`, `limit`, `truncated`, `next_offset`, `items`. Accountant prompt rules treat `truncated=true` as incomplete and use `next_offset` only when the user asks to continue.
+
+Expenses are company-scoped and can optionally link a same-company `partner_id`. Legacy expenses missing `company_id` must be backfilled before they participate in company-scoped reporting (`scripts/migrations/backfill_expense_company_id.py`).
+
+Financial summary top-level totals are EUR-denominated (`currency="EUR"`, `exchange_rates_to_eur`) for cross-currency comparison, while source-currency totals remain in `totals_by_currency`. Unsupported currencies are listed in `unsupported_currencies`.
+
+Partner resolution is handled by Business `POST /partners/resolve`, which returns ranked candidates with `match_type`, `score`, and `match_reasons`. Search normalization fields (`*_normalized`, `search_text`) are indexed and can be backfilled with `scripts/migrations/backfill_search_normalized_fields.py`.
 
 Financial write tools require explicit user confirmation before creating records. Tool code calls `BusinessClient`, not repositories, so REST and chat behavior share Business validation, calculations, and user scoping without duplicating ownership inside Agent.
 

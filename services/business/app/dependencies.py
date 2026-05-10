@@ -82,8 +82,12 @@ def get_company_service(
     )
 
 
-def get_expense_service(repo: ExpenseRepository = Depends(get_expense_repo)) -> ExpenseService:
-    return ExpenseService(repo)
+def get_expense_service(
+    repo: ExpenseRepository = Depends(get_expense_repo),
+    company_service: CompanyService = Depends(get_company_service),
+    partner_repo: PartnerRepository = Depends(get_partner_repo),
+) -> ExpenseService:
+    return ExpenseService(repo, company_service=company_service, partner_repo=partner_repo)
 
 
 def get_partner_service(
@@ -101,8 +105,10 @@ def get_partner_service(
 def get_financial_summary_service(
     invoice_repo: InvoiceRepository = Depends(get_invoice_repo),
     expense_repo: ExpenseRepository = Depends(get_expense_repo),
+    company_service: CompanyService = Depends(get_company_service),
+    partner_service: PartnerService = Depends(get_partner_service),
 ) -> FinancialSummaryService:
-    return FinancialSummaryService(invoice_repo, expense_repo)
+    return FinancialSummaryService(invoice_repo, expense_repo, company_service, partner_service)
 
 
 def get_inventory_service(

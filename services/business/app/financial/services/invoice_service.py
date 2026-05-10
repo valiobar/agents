@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from fastapi import HTTPException, status
 
+from app.common.models import ListEnvelope, make_list_envelope
 from app.company.models import CompanyInDB
 from app.company.services.company_service import CompanyService
 from app.financial.models import (
@@ -98,6 +99,34 @@ class InvoiceService:
 
         return items, quantize_money(subtotal), quantize_money(vat_total), quantize_money(total)
 
+    async def _link_inventory_items(
+        self,
+        *,
+        user_id: str,
+        company_id: str,
+        items: list[InvoiceItem],
+    ) -> tuple[list[InvoiceItem], bool]:
+        if not self.inventory_service:
+            return items, False
+
+        linked_items: list[InvoiceItem] = []
+        changed = False
+        for item in items:
+            if item.inventory_item_id:
+                linked_items.append(item)
+                continue
+            resolved_item_id = await self.inventory_service.resolve_item_id_for_invoice_line(
+                user_id=user_id,
+                company_id=company_id,
+                description=item.description,
+            )
+            if not resolved_item_id:
+                linked_items.append(item)
+                continue
+            changed = True
+            linked_items.append(item.model_copy(update={"inventory_item_id": resolved_item_id}))
+        return linked_items, changed
+
     async def create_invoice(self, user_id: str, payload: InvoiceCreate) -> InvoiceInDB:
         company = await self.company_service.require_company(user_id, payload.company_id)
         if self.inventory_service:
@@ -111,6 +140,11 @@ class InvoiceService:
                     )
         partner_id, recipient_snapshot, counterparty = await self._resolve_recipient(user_id, payload)
         items, subtotal, vat_total, total = self._calculate_items(payload)
+        items, _ = await self._link_inventory_items(
+            user_id=user_id,
+            company_id=payload.company_id,
+            items=items,
+        )
         invoice_number = await self.repo.next_invoice_number(user_id, payload.company_id, payload.issue_date.year)
         doc = payload.model_dump(exclude={"items", "recipient"}, mode="python")
         doc.update(
@@ -143,6 +177,13 @@ class InvoiceService:
     ) -> list[InvoiceInDB]:
         return await self.repo.list_by_user(user_id, filters, limit, offset)
 
+    async def list_invoices_envelope(
+        self, user_id: str, filters: InvoiceFilters, limit: int, offset: int
+    ) -> ListEnvelope[InvoiceInDB]:
+        items = await self.repo.list_by_user(user_id, filters, limit, offset)
+        total_count = await self.repo.count_by_user(user_id, filters)
+        return make_list_envelope(items=items, total_count=total_count, offset=offset, limit=limit)
+
     async def get_invoice(self, user_id: str, invoice_id: str) -> InvoiceInDB:
         invoice = await self.repo.get_by_id(user_id, invoice_id)
         if invoice is None:
@@ -161,6 +202,15 @@ class InvoiceService:
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Invalid invoice status transition",
                 )
+
+        if should_issue_stock and self.inventory_service and current.company_id:
+            linked_items, linked_changed = await self._link_inventory_items(
+                user_id=user_id,
+                company_id=current.company_id,
+                items=current.items,
+            )
+            if linked_changed:
+                update["items"] = [item.model_dump(mode="python") for item in linked_items]
 
         updated = await self.repo.update_status_or_metadata(user_id, invoice_id, update)
         if updated is None:

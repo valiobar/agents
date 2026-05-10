@@ -5,6 +5,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from app.models.common import ListEnvelope
+
 PartnerKind = Literal["client", "supplier", "both", "other"]
 
 
@@ -49,3 +51,36 @@ class PartnerResponse(PartnerCreate):
     user_id: str
     created_at: datetime
     updated_at: datetime
+
+
+PartnerListResponse = ListEnvelope[PartnerResponse]
+
+PartnerMatchType = Literal[
+    "id",
+    "registration_number_exact",
+    "vat_exact",
+    "name_exact",
+    "name_prefix",
+    "contains",
+]
+
+
+class PartnerResolveRequest(BaseModel):
+    company_id: str = Field(min_length=1, max_length=64)
+    kind: PartnerKind | None = None
+    partner_id: str | None = Field(default=None, min_length=1, max_length=64)
+    registration_number: str | None = Field(default=None, min_length=1, max_length=64)
+    vat_number: str | None = Field(default=None, min_length=1, max_length=64)
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    limit: int = Field(default=5, ge=1, le=10)
+
+
+class PartnerMatchCandidate(BaseModel):
+    partner: PartnerResponse
+    match_type: PartnerMatchType
+    score: float = Field(ge=0, le=1)
+    match_reasons: list[str] = Field(default_factory=list)
+
+
+class PartnerResolveResponse(BaseModel):
+    candidates: list[PartnerMatchCandidate] = Field(default_factory=list)

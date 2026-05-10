@@ -8,11 +8,18 @@ import { useConversation, useConversations } from "@/entities/conversation/api/q
 import { getConversationDisplayTitle } from "@/entities/conversation/model/display-title";
 import { MessageList } from "@/entities/conversation/ui/message-list";
 import { expenseKeys } from "@/entities/expense/model/query-keys";
+import { inventoryKeys } from "@/entities/inventory/model/query-keys";
 import { partnerKeys } from "@/entities/partner/model/query-keys";
 import { streamAgentMessage } from "@/features/send-message/api/stream-message";
-import { confirmExtractedExpense, createExpenseDraft } from "@/features/send-message/api/receipt-expense";
+import {
+  confirmExtractedExpense,
+  confirmInventoryImportForExpense,
+  createDocumentIntake,
+  updateInventoryImportPreviewLines,
+} from "@/features/send-message/api/receipt-expense";
 import { ExpenseDraftConfirmation } from "@/features/send-message/ui/expense-draft-confirmation";
 import { MessageInput } from "@/features/send-message/ui/message-input";
+import { SupplierInvoiceInventoryConfirmation } from "@/features/send-message/ui/supplier-invoice-inventory-confirmation";
 import { conversationKeys } from "@/entities/conversation/model/query-keys";
 import { documentKeys } from "@/features/upload-document/api/mutations";
 import { useChatStore } from "@/shared/store/chat-store";
@@ -26,7 +33,7 @@ import { receiptUploadSchema, getReceiptUploadErrorMessage, type ExpenseDraftFor
 import { Spinner } from "@/shared/ui/spinner";
 import type { RecordStockMovementInput } from "@/features/record-stock-movement/model/schema";
 import { StockMovementDraftConfirmation } from "@/features/record-stock-movement/ui/stock-movement-draft-confirmation";
-import type { StockMovement } from "@/entities/inventory/model/types";
+import type { ImportPreviewLine, StockMovement } from "@/entities/inventory/model/types";
 
 import { chatReducer, type ChatState } from "../model/chat-reducer";
 
@@ -62,9 +69,11 @@ export function ChatWindow({
       streamingContent: "",
       status: "idle",
       error: null,
-      expenseDraftStatus: "idle",
+      documentReviewStatus: "idle",
       expenseDraft: null,
-      expenseDraftError: null,
+      inventoryImportPreview: null,
+      unknownDocumentReview: null,
+      documentReviewError: null,
       toolTraces: [],
     }),
     [],
@@ -76,15 +85,15 @@ export function ChatWindow({
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const conversationsMenuRef = useRef<HTMLDetailsElement | null>(null);
 
-  const isExtractingExpense = state.expenseDraftStatus === "loading";
-  const isConfirmingExpense = state.expenseDraftStatus === "confirming";
-  const isExpenseConfirmed = state.expenseDraftStatus === "confirmed";
+  const isExtractingDocument = state.documentReviewStatus === "loading";
+  const isConfirmingInventory = state.documentReviewStatus === "confirming_inventory";
+  const isConfirmingExpense = state.documentReviewStatus === "confirming_expense";
+  const isExpenseConfirmed = state.documentReviewStatus === "confirmed";
   const isAgentThinking =
     state.status === "streaming" && state.streamingContent.length === 0;
-  const hasActiveExpenseDraft =
-    state.expenseDraftStatus === "loading" ||
-    state.expenseDraftStatus === "ready" ||
-    state.expenseDraftStatus === "confirming";
+  const hasActiveDocumentReview = !["idle", "confirmed", "error"].includes(
+    state.documentReviewStatus,
+  );
   const latestMessage = state.messages.at(-1);
   const latestMessageScrollKey = latestMessage
     ? [
@@ -251,17 +260,17 @@ export function ChatWindow({
     addNotification("Stock movement recorded.", "success");
   }
 
-  async function handleReceiptSelected(file: File) {
+  async function handleDocumentSelected(file: File) {
     if (!token) {
-      addNotification("You must be logged in to upload receipts.", "error");
+      addNotification("You must be logged in to upload documents.", "error");
       return;
     }
     if (!companyId) {
-      addNotification("Assign this agent to a company before uploading receipts.", "error");
+      addNotification("Assign this agent to a company before uploading documents.", "error");
       return;
     }
     if (state.status === "streaming") {
-      addNotification("Please wait for the current response to finish before uploading a receipt.", "info");
+      addNotification("Please wait for the current response to finish before uploading a document.", "info");
       return;
     }
 
@@ -271,18 +280,54 @@ export function ChatWindow({
       return;
     }
 
-    dispatch({ type: "EXPENSE_DRAFT_LOADING" });
+    dispatch({ type: "DOCUMENT_INTAKE_LOADING" });
     try {
-      const response = await createExpenseDraft({
+      const response = await createDocumentIntake({
         agentId,
         file,
-        sourceDocumentType: "auto",
+        requestedType: "auto",
         token,
       });
-      dispatch({ type: "EXPENSE_DRAFT_READY", payload: response.draft });
+      dispatch({ type: "DOCUMENT_INTAKE_READY", payload: response });
     } catch (error) {
-      dispatch({ type: "EXPENSE_DRAFT_ERROR", payload: getReceiptUploadErrorMessage(error) });
-      addNotification(getReceiptUploadErrorMessage(error), "error");
+      const errorMessage = getReceiptUploadErrorMessage(error);
+      dispatch({ type: "DOCUMENT_INTAKE_ERROR", payload: errorMessage });
+      addNotification(errorMessage, "error");
+    }
+  }
+
+  async function handleInventoryConfirm(lines: ImportPreviewLine[], values: ExpenseDraftFormValues) {
+    if (!token) {
+      addNotification("You must be logged in to confirm inventory imports.", "error");
+      return;
+    }
+    if (!state.inventoryImportPreview) {
+      addNotification("No inventory preview is available to confirm.", "error");
+      return;
+    }
+
+    dispatch({ type: "INVENTORY_IMPORT_CONFIRMING" });
+    try {
+      await updateInventoryImportPreviewLines({
+        previewId: state.inventoryImportPreview.id,
+        lines,
+        token,
+      });
+
+      const response = await confirmInventoryImportForExpense({
+        agentId,
+        previewId: state.inventoryImportPreview.id,
+        draft: values,
+        token,
+      });
+
+      await queryClient.invalidateQueries({ queryKey: inventoryKeys.all });
+      dispatch({ type: "INVENTORY_IMPORT_CONFIRMED_FOR_EXPENSE", payload: response });
+      addNotification("Inventory import confirmed. Review and confirm the expense next.", "success");
+    } catch (error) {
+      const errorMessage = getReceiptUploadErrorMessage(error);
+      dispatch({ type: "INVENTORY_IMPORT_CONFIRMATION_FAILED", payload: errorMessage });
+      throw error;
     }
   }
 
@@ -292,6 +337,10 @@ export function ChatWindow({
       return;
     }
 
+    const fallbackStatus =
+      state.documentReviewStatus === "supplier_expense_ready"
+        ? "supplier_expense_ready"
+        : "receipt_expense_ready";
     dispatch({ type: "EXPENSE_CONFIRMING" });
 
     try {
@@ -322,7 +371,7 @@ export function ChatWindow({
       }
       addNotification(`Expense recorded: ${response.expense.counterparty}.${partnerMessage}`, "success");
     } catch (error) {
-      dispatch({ type: "EXPENSE_DRAFT_READY", payload: values });
+      dispatch({ type: "EXPENSE_CONFIRMATION_FAILED", payload: { draft: values, fallbackStatus } });
       throw error;
     }
   }
@@ -445,26 +494,60 @@ export function ChatWindow({
             <span>Agent is thinking...</span>
           </output>
         ) : null}
-        {isExtractingExpense ? (
+        {isExtractingDocument ? (
           <output
             className="mt-3 flex items-center gap-2 rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground"
           >
             <Spinner />
-            <span>Reading document and extracting expense details...</span>
+            <span>Reading document and preparing review...</span>
           </output>
         ) : null}
-        {(state.expenseDraftStatus === "ready" ||
-          state.expenseDraftStatus === "confirming" ||
-          state.expenseDraftStatus === "confirmed") &&
+        {(state.documentReviewStatus === "supplier_inventory_ready" ||
+          state.documentReviewStatus === "confirming_inventory") &&
+        state.expenseDraft &&
+        state.inventoryImportPreview ? (
+          <SupplierInvoiceInventoryConfirmation
+            draft={state.expenseDraft}
+            preview={state.inventoryImportPreview}
+            disabled={state.status === "streaming"}
+            confirming={isConfirmingInventory}
+            onCancel={() => dispatch({ type: "DOCUMENT_REVIEW_CLEAR" })}
+            onConfirmWithLines={handleInventoryConfirm}
+          />
+        ) : null}
+        {(state.documentReviewStatus === "receipt_expense_ready" ||
+          state.documentReviewStatus === "supplier_expense_ready" ||
+          state.documentReviewStatus === "confirming_expense" ||
+          state.documentReviewStatus === "confirmed") &&
         state.expenseDraft ? (
           <ExpenseDraftConfirmation
             draft={state.expenseDraft}
             disabled={state.status === "streaming"}
             confirming={isConfirmingExpense}
             confirmed={isExpenseConfirmed}
-            onCancel={() => dispatch({ type: "EXPENSE_DRAFT_CLEAR" })}
+            onCancel={() => dispatch({ type: "DOCUMENT_REVIEW_CLEAR" })}
             onConfirm={handleDraftConfirm}
           />
+        ) : null}
+        {state.documentReviewStatus === "unknown_ready" && state.unknownDocumentReview ? (
+          <div className="mx-3 mb-3 mt-3">
+            <Alert>
+              <div className="space-y-2 text-sm">
+                <p className="font-medium">Document needs manual review</p>
+                <p>
+                  This upload was classified as {state.unknownDocumentReview.classification.document_type}. Please
+                  review it manually outside the expense workflow.
+                </p>
+                {state.unknownDocumentReview.warnings.length > 0 ? (
+                  <ul className="list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+                    {state.unknownDocumentReview.warnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+            </Alert>
+          </div>
         ) : null}
         {movementDraft ? (
           <StockMovementDraftConfirmation
@@ -478,18 +561,18 @@ export function ChatWindow({
         <div ref={bottomRef} />
       </div>
 
-      {state.expenseDraftStatus === "error" && state.expenseDraftError ? (
+      {state.documentReviewStatus === "error" && state.documentReviewError ? (
         <div className="px-4 pt-3">
-          <Alert variant="destructive">{state.expenseDraftError}</Alert>
+          <Alert variant="destructive">{state.documentReviewError}</Alert>
         </div>
       ) : null}
 
       <MessageInput
-        disabled={state.status === "streaming" || isConfirmingExpense}
+        disabled={state.status === "streaming" || isConfirmingInventory || isConfirmingExpense}
         focusRequestKey={latestMessageScrollKey}
-        receiptUploadDisabled={!companyId || state.status === "streaming" || hasActiveExpenseDraft}
-        receiptUploadLoading={isExtractingExpense}
-        onReceiptSelected={handleReceiptSelected}
+        receiptUploadDisabled={!companyId || state.status === "streaming" || hasActiveDocumentReview}
+        receiptUploadLoading={isExtractingDocument}
+        onReceiptSelected={handleDocumentSelected}
         onSend={sendMessage}
       />
     </div>

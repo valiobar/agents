@@ -5,6 +5,7 @@ type QueryParamValue = string | number | boolean | null | undefined;
 export interface InventoryItemListParams {
   [key: string]: QueryParamValue;
   company_id: string;
+  search?: string;
   category?: string;
   is_active?: boolean;
   sku?: string;

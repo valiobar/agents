@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 
+from app.models.common import ListEnvelope
+
 CurrencyCode = Literal["BGN", "EUR", "USD"]
 InvoiceStatus = Literal["draft", "sent", "paid", "overdue", "cancelled"]
 PaymentMethod = Literal["bank_transfer", "cash", "card", "other"]
@@ -76,6 +78,9 @@ class InvoiceItemCreate(MoneyModel):
     unit_price: Decimal = Field(ge=0)
     vat_rate: Decimal = Field(default=Decimal("0.20"), ge=0, le=1)
     category: str | None = Field(default=None, max_length=120)
+    inventory_item_id: str | None = Field(default=None, max_length=64)
+    inventory_location_id: str | None = Field(default=None, max_length=64)
+    stock_quantity: Decimal | None = Field(default=None, gt=0)
 
 
 class InvoiceItem(InvoiceItemCreate):
@@ -177,6 +182,8 @@ class ExpenseItem(ExpenseItemCreate):
 
 
 class ExpenseCreate(MoneyModel):
+    company_id: str = Field(min_length=1, max_length=64)
+    partner_id: str | None = Field(default=None, max_length=64)
     counterparty: str = Field(min_length=1, max_length=200)
     expense_date: date
     amount: Decimal | None = Field(default=None, gt=0)
@@ -210,6 +217,8 @@ class ExpenseResponse(ExpenseCreate):
 
 
 class ExpenseFilters(BaseModel):
+    company_id: str
+    partner_id: str | None = None
     category: ExpenseCategory | None = None
     counterparty: str | None = None
     date_from: date | None = None
@@ -246,8 +255,8 @@ class FinancialSummaryBucket(MoneyModel):
 
 
 class FinancialSummaryResponse(MoneyModel):
-    currency: CurrencyCode = "BGN"
-    exchange_rates_to_bgn: dict[str, Decimal] = Field(default_factory=dict)
+    currency: CurrencyCode = "EUR"
+    exchange_rates_to_eur: dict[str, Decimal] = Field(default_factory=dict)
     invoice_total: Decimal
     expense_total: Decimal
     deductible_expense_total: Decimal
@@ -255,3 +264,7 @@ class FinancialSummaryResponse(MoneyModel):
     buckets: list[FinancialSummaryBucket] = Field(default_factory=list)
     totals_by_currency: list[FinancialSummaryCurrencyTotals] = Field(default_factory=list)
     unsupported_currencies: list[str] = Field(default_factory=list)
+
+
+InvoiceListResponse = ListEnvelope[InvoiceResponse]
+ExpenseListResponse = ListEnvelope[ExpenseResponse]

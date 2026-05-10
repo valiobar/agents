@@ -1,6 +1,6 @@
 """Financial Agent Service models package."""
 
-from app.models.financial.company import CompanyResponse
+from app.models.financial.company import CompanyListResponse, CompanyResponse
 from app.models.financial.companybook import (
     CompanyBookCompanyDetail,
     CompanyBookContacts,
@@ -16,6 +16,7 @@ from app.models.financial.financial import (
     ExpenseFilters,
     ExpenseItem,
     ExpenseItemCreate,
+    ExpenseListResponse,
     ExpenseResponse,
     ExpenseSourceDocumentType,
     FinancialSummaryBucket,
@@ -26,6 +27,7 @@ from app.models.financial.financial import (
     InvoiceFilters,
     InvoiceItem,
     InvoiceItemCreate,
+    InvoiceListResponse,
     InvoicePartyInput,
     InvoicePartySnapshot,
     InvoiceResponse,
@@ -34,7 +36,16 @@ from app.models.financial.financial import (
     PaymentMethod,
     SummaryGroupBy,
 )
-from app.models.financial.partner import PartnerCreate, PartnerKind, PartnerResponse
+from app.models.financial.partner import (
+    PartnerCreate,
+    PartnerKind,
+    PartnerListResponse,
+    PartnerMatchCandidate,
+    PartnerMatchType,
+    PartnerResolveRequest,
+    PartnerResolveResponse,
+    PartnerResponse,
+)
 from app.models.financial.receipt import (
     ConfirmExtractedExpenseRequest,
     ConfirmExtractedExpenseResponse,
@@ -48,6 +59,7 @@ from app.models.financial.receipt import (
 
 __all__ = [
     "CompanyResponse",
+    "CompanyListResponse",
     "CompanyBookCompanyDetail",
     "CompanyBookContacts",
     "CompanyBookPartnerMappingError",
@@ -60,6 +72,7 @@ __all__ = [
     "ExpenseFilters",
     "ExpenseItem",
     "ExpenseItemCreate",
+    "ExpenseListResponse",
     "ExpenseResponse",
     "ExpenseSourceDocumentType",
     "FinancialSummaryBucket",
@@ -70,6 +83,7 @@ __all__ = [
     "InvoiceFilters",
     "InvoiceItem",
     "InvoiceItemCreate",
+    "InvoiceListResponse",
     "InvoicePartyInput",
     "InvoicePartySnapshot",
     "InvoiceResponse",
@@ -79,6 +93,11 @@ __all__ = [
     "SummaryGroupBy",
     "PartnerCreate",
     "PartnerKind",
+    "PartnerListResponse",
+    "PartnerMatchCandidate",
+    "PartnerMatchType",
+    "PartnerResolveRequest",
+    "PartnerResolveResponse",
     "PartnerResponse",
     "ConfirmExtractedExpenseRequest",
     "ConfirmExtractedExpenseResponse",

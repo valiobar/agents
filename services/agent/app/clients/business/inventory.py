@@ -9,6 +9,7 @@ from app.models.inventory import (
     InventoryMovementSummaryResponse,
     InventoryOverviewResponse,
     InventoryCategoryListResponse,
+    InventoryImportPreviewCreate,
     InventoryImportPreviewListResponse,
     InventoryImportPreviewResponse,
     InventoryImportResult,
@@ -320,6 +321,19 @@ class _InventoryClient(_BusinessClientBase):
             json=payload.model_dump(mode="json"),
         )
         return ResolveInventoryItemResponse.model_validate(data)
+
+    async def create_import_preview(
+        self,
+        user_id: str,
+        payload: InventoryImportPreviewCreate,
+    ) -> InventoryImportPreviewResponse:
+        data = await self._request(
+            "POST",
+            "/inventory/import-previews",
+            user_id,
+            json=payload.model_dump(mode="json"),
+        )
+        return InventoryImportPreviewResponse.model_validate(data)
 
     async def list_import_previews(
         self,

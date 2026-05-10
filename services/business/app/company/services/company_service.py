@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
+from app.common.models import ListEnvelope, make_list_envelope
 from app.company.models import CompanyCreate, CompanyInDB, CompanyUpdate
 from app.company.repositories.company_repo import CompanyRepository
 from app.financial.repositories.invoice_repo import InvoiceRepository
@@ -24,8 +25,31 @@ class CompanyService:
     async def create_company(self, user_id: str, payload: CompanyCreate) -> CompanyInDB:
         return await self.company_repo.create(user_id, payload)
 
-    async def list_companies(self, user_id: str, limit: int, offset: int) -> list[CompanyInDB]:
-        return await self.company_repo.list_by_user(user_id, limit, offset)
+    async def list_companies(
+        self, user_id: str, limit: int, offset: int, query: str | None = None
+    ) -> list[CompanyInDB]:
+        return await self.company_repo.list_by_user(
+            user_id,
+            query=query,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def list_companies_envelope(
+        self,
+        user_id: str,
+        limit: int,
+        offset: int,
+        query: str | None = None,
+    ) -> ListEnvelope[CompanyInDB]:
+        items = await self.company_repo.list_by_user(
+            user_id,
+            query=query,
+            limit=limit,
+            offset=offset,
+        )
+        total_count = await self.company_repo.count_by_user(user_id, query=query)
+        return make_list_envelope(items=items, total_count=total_count, offset=offset, limit=limit)
 
     async def require_company(self, user_id: str, company_id: str) -> CompanyInDB:
         company = await self.company_repo.get_by_id(user_id, company_id)

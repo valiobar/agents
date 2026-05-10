@@ -10,9 +10,10 @@ from bson.decimal128 import Decimal128
 _MONEY_QUANT = Decimal("0.01")
 _RATE_QUANT = Decimal("0.0001")
 EUR_TO_BGN_RATE = Decimal("1.95583000")
-EXCHANGE_RATES_TO_BGN: dict[str, Decimal] = {
-    "BGN": Decimal("1"),
-    "EUR": EUR_TO_BGN_RATE,
+BGN_PER_EUR = Decimal("1.95583")
+EXCHANGE_RATES_TO_EUR: dict[str, Decimal] = {
+    "EUR": Decimal("1"),
+    "BGN": Decimal("1") / BGN_PER_EUR,
 }
 
 
@@ -24,8 +25,8 @@ def quantize_rate(value: Decimal) -> Decimal:
     return value.quantize(_RATE_QUANT, rounding=ROUND_HALF_UP)
 
 
-def convert_to_bgn(amount: Decimal, currency: str) -> Decimal | None:
-    rate = EXCHANGE_RATES_TO_BGN.get(currency)
+def convert_to_eur(amount: Decimal, currency: str) -> Decimal | None:
+    rate = EXCHANGE_RATES_TO_EUR.get(currency)
     if rate is None:
         return None
     return quantize_money(amount * rate)

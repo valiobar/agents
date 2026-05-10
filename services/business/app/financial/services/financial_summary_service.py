@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
+from fastapi import HTTPException, status
+from app.company.services.company_service import CompanyService
 from app.financial.models import (
     FinancialSummaryBucket,
     FinancialSummaryCurrencyTotals,
@@ -9,14 +11,23 @@ from app.financial.models import (
     FinancialSummaryResponse,
 )
 from app.financial.repositories.expense_repo import ExpenseRepository
-from app.financial.repositories.financial_utils import EXCHANGE_RATES_TO_BGN, convert_to_bgn, quantize_money
+from app.financial.repositories.financial_utils import EXCHANGE_RATES_TO_EUR, convert_to_eur, quantize_money
 from app.financial.repositories.invoice_repo import InvoiceRepository
+from app.partner.services.partner_service import PartnerService
 
 
 class FinancialSummaryService:
-    def __init__(self, invoice_repo: InvoiceRepository, expense_repo: ExpenseRepository) -> None:
+    def __init__(
+        self,
+        invoice_repo: InvoiceRepository,
+        expense_repo: ExpenseRepository,
+        company_service: CompanyService,
+        partner_service: PartnerService,
+    ) -> None:
         self.invoice_repo = invoice_repo
         self.expense_repo = expense_repo
+        self.company_service = company_service
+        self.partner_service = partner_service
 
     def _currency_totals(self, values: dict[str, FinancialSummaryCurrencyTotals]) -> list[FinancialSummaryCurrencyTotals]:
         return sorted(values.values(), key=lambda item: item.currency)
@@ -41,7 +52,7 @@ class FinancialSummaryService:
         bucket_total.invoice_total += amount
         bucket_total.net_total += amount
 
-        converted = convert_to_bgn(amount, currency)
+        converted = convert_to_eur(amount, currency)
         if converted is not None:
             buckets.setdefault(key, FinancialSummaryBucket(key=key)).invoice_total += converted
         return converted
@@ -69,8 +80,8 @@ class FinancialSummaryService:
         bucket_total.deductible_expense_total += deductible
         bucket_total.net_total -= amount
 
-        converted_amount = convert_to_bgn(amount, currency)
-        converted_deductible = convert_to_bgn(deductible, currency)
+        converted_amount = convert_to_eur(amount, currency)
+        converted_deductible = convert_to_eur(deductible, currency)
         if converted_amount is not None and converted_deductible is not None:
             bucket = buckets.setdefault(key, FinancialSummaryBucket(key=key))
             bucket.expense_total += converted_amount
@@ -138,6 +149,16 @@ class FinancialSummaryService:
         return expense_total, deductible_total
 
     async def get_summary(self, user_id: str, request: FinancialSummaryRequest) -> FinancialSummaryResponse:
+        if request.partner_id and not request.company_id:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="company_id is required when partner_id is supplied",
+            )
+        if request.company_id:
+            await self.company_service.require_company(user_id, request.company_id)
+        if request.partner_id:
+            await self.partner_service.get_partner(user_id, request.company_id, request.partner_id)
+
         buckets: dict[str, FinancialSummaryBucket] = {}
         totals_by_currency: dict[str, FinancialSummaryCurrencyTotals] = {}
         bucket_currency_totals: dict[str, dict[str, FinancialSummaryCurrencyTotals]] = {}
@@ -174,7 +195,7 @@ class FinancialSummaryService:
 
         return FinancialSummaryResponse(
             currency="EUR",
-            exchange_rates_to_bgn=EXCHANGE_RATES_TO_BGN,
+            exchange_rates_to_eur=EXCHANGE_RATES_TO_EUR,
             invoice_total=quantize_money(invoice_total),
             expense_total=quantize_money(expense_total),
             deductible_expense_total=quantize_money(deductible_total),

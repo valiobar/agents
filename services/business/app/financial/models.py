@@ -188,6 +188,8 @@ class ExpenseItem(ExpenseItemCreate):
 
 
 class ExpenseCreate(MoneyModel):
+    company_id: str = Field(min_length=1, max_length=64)
+    partner_id: str | None = Field(default=None, max_length=64)
     counterparty: str = Field(min_length=1, max_length=200)
     expense_date: date
     amount: Decimal | None = Field(default=None, gt=0)
@@ -223,6 +225,8 @@ class ExpenseResponse(ExpenseInDB):
 
 
 class ExpenseFilters(BaseModel):
+    company_id: str
+    partner_id: str | None = None
     category: ExpenseCategory | None = None
     counterparty: str | None = None
     date_from: date | None = None
@@ -259,8 +263,8 @@ class FinancialSummaryBucket(MoneyModel):
 
 
 class FinancialSummaryResponse(MoneyModel):
-    currency: CurrencyCode = "BGN"
-    exchange_rates_to_bgn: dict[str, Decimal] = Field(default_factory=dict)
+    currency: CurrencyCode = "EUR"
+    exchange_rates_to_eur: dict[str, Decimal] = Field(default_factory=dict)
     invoice_total: Decimal
     expense_total: Decimal
     deductible_expense_total: Decimal

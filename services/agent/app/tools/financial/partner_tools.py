@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 
 from langchain_core.tools import StructuredTool
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.clients.business import BusinessClientError
-from app.models.financial.partner import PartnerCreate, PartnerKind, PartnerResponse
+from app.models.financial.partner import PartnerCreate, PartnerKind, PartnerResolveRequest, PartnerResponse
 from app.runtime.tool_context import ToolContext
 from app.tools.financial.company_scope import _with_scoped_company
 
@@ -14,6 +14,7 @@ _UNASSIGNED_COMPANY_DESCRIPTION = "Required when the agent is not assigned to on
 
 
 class SearchPartnersArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     company_id: str | None = Field(
         default=None,
         max_length=64,
@@ -26,6 +27,7 @@ class SearchPartnersArgs(BaseModel):
     )
     kind: PartnerKind | None = None
     limit: int = Field(default=10, ge=1, le=20)
+    offset: int = Field(default=0, ge=0, le=10_000)
 
     @field_validator("query", mode="before")
     @classmethod
@@ -36,6 +38,7 @@ class SearchPartnersArgs(BaseModel):
 
 
 class ResolvePartnerArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     company_id: str | None = Field(
         default=None,
         max_length=64,
@@ -54,6 +57,7 @@ class ResolvePartnerArgs(BaseModel):
 
 
 class GetPartnerArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     company_id: str | None = Field(
         default=None,
         max_length=64,
@@ -63,6 +67,7 @@ class GetPartnerArgs(BaseModel):
 
 
 class CreatePartnerArgs(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     company_id: str | None = Field(
         default=None,
         max_length=64,
@@ -105,7 +110,7 @@ async def _resolve_existing_partner_by_registration_number(
     )
     exact_matches = [
         partner
-        for partner in matches
+        for partner in matches.items
         if _matches_registration_number(partner, registration_number)
     ]
     return exact_matches[0] if len(exact_matches) == 1 else None
@@ -160,11 +165,11 @@ def build_partner_tools(
                     kind=args.kind,
                     query=args.query,
                     limit=args.limit,
-                    offset=0,
+                    offset=args.offset,
                 )
             except BusinessClientError as exc:
                 return exc.message
-            return _json([partner.model_dump(mode="json") for partner in partners])
+            return _json(partners.model_dump(mode="json"))
 
         return await _with_scoped_company(company_id, args.company_id, "searching partners", run)
 
@@ -173,29 +178,23 @@ def build_partner_tools(
 
         async def run(target_company_id: str) -> str:
             try:
-                partners = await context.business_client.list_partners(
+                resolved = await context.business_client.resolve_partner(
                     user_id=user_id,
-                    company_id=target_company_id,
-                    kind=args.kind,
-                    query=args.name,
-                    limit=args.max_matches,
-                    offset=0,
+                    payload=PartnerResolveRequest(
+                        company_id=target_company_id,
+                        kind=args.kind,
+                        name=args.name,
+                        limit=args.max_matches,
+                    ),
                 )
             except BusinessClientError as exc:
                 return exc.message
-            if not partners:
+            if not resolved.candidates:
                 return (
                     f"No partner matching '{args.name}' was found. "
                     "Ask the user for partner details or create the partner first."
                 )
-            if len(partners) == 1:
-                return _json(partners[0].model_dump(mode="json"))
-            return _json(
-                {
-                    "message": "Multiple partners match this name. Ask the user which partner to use.",
-                    "matches": [partner.model_dump(mode="json") for partner in partners],
-                }
-            )
+            return _json(resolved.model_dump(mode="json"))
 
         return await _with_scoped_company(company_id, args.company_id, "resolving partners", run)
 
@@ -239,7 +238,7 @@ def build_partner_tools(
         StructuredTool.from_function(
             coroutine=resolve_partner_by_name,
             name="resolve_partner_by_name",
-            description="Find the best existing partner by a company name mentioned by the user before creating an invoice.",
+            description="Resolve partner by name and return ranked match candidates with score and match reasons.",
             args_schema=ResolvePartnerArgs,
         ),
         StructuredTool.from_function(

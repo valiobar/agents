@@ -20,6 +20,7 @@ from app.dependencies import (
     get_partner_service,
 )
 from app.main import app
+from app.common.models import ListEnvelope, make_list_envelope
 from app.company.models import CompanyCreate, CompanyInDB
 from app.financial.models import (
     ExpenseInDB,
@@ -116,6 +117,8 @@ def _expense(user_id: str = "user-1") -> ExpenseInDB:
     return ExpenseInDB(
         id="expense-1",
         user_id=user_id,
+        company_id="company-1",
+        partner_id=None,
         counterparty="Office Store",
         expense_date=date(2026, 4, 27),
         amount=Decimal("10.00"),
@@ -136,6 +139,7 @@ def _expense(user_id: str = "user-1") -> ExpenseInDB:
 class FakeCompanyService:
     def __init__(self) -> None:
         self.created: CompanyInDB | None = None
+        self.last_list_query: str | None = None
 
     async def create_company(self, user_id: str, payload: CompanyCreate) -> CompanyInDB:
         await sleep(0)
@@ -152,6 +156,18 @@ class FakeCompanyService:
     async def list_companies(self, user_id: str, limit: int, offset: int) -> list[CompanyInDB]:
         await sleep(0)
         return [self.created or _company(user_id)]
+
+    async def list_companies_envelope(
+        self, user_id: str, limit: int, offset: int, query: str | None = None
+    ) -> ListEnvelope[CompanyInDB]:
+        await sleep(0)
+        self.last_list_query = query
+        return make_list_envelope(
+            items=[self.created or _company(user_id)],
+            total_count=1,
+            offset=offset,
+            limit=limit,
+        )
 
     async def require_company(self, user_id: str, company_id: str) -> CompanyInDB:
         await sleep(0)
@@ -175,6 +191,23 @@ class FakePartnerService:
         await sleep(0)
         return [_partner(user_id, company_id)]
 
+    async def list_partners_envelope(
+        self,
+        user_id: str,
+        company_id: str,
+        kind: str | None,
+        query: str | None,
+        limit: int,
+        offset: int,
+    ) -> ListEnvelope[PartnerInDB]:
+        await sleep(0)
+        return make_list_envelope(
+            items=[_partner(user_id, company_id)],
+            total_count=1,
+            offset=offset,
+            limit=limit,
+        )
+
 
 class FakeInvoiceService:
     async def create_invoice(self, user_id: str, payload: object) -> InvoiceInDB:
@@ -187,23 +220,47 @@ class FakeInvoiceService:
         partner_id = getattr(filters, "partner_id") or "partner-1"
         return [_invoice(user_id, company_id, partner_id)]
 
+    async def list_invoices_envelope(
+        self, user_id: str, filters: object, limit: int, offset: int
+    ) -> ListEnvelope[InvoiceInDB]:
+        await sleep(0)
+        company_id = getattr(filters, "company_id") or "company-1"
+        partner_id = getattr(filters, "partner_id") or "partner-1"
+        return make_list_envelope(
+            items=[_invoice(user_id, company_id, partner_id)],
+            total_count=1,
+            offset=offset,
+            limit=limit,
+        )
+
 
 class FakeExpenseService:
     async def list_expenses(self, user_id: str, filters: object, limit: int, offset: int) -> list[ExpenseInDB]:
         await sleep(0)
         return [_expense(user_id)]
 
+    async def list_expenses_envelope(
+        self, user_id: str, filters: object, limit: int, offset: int
+    ) -> ListEnvelope[ExpenseInDB]:
+        await sleep(0)
+        return make_list_envelope(
+            items=[_expense(user_id)],
+            total_count=1,
+            offset=offset,
+            limit=limit,
+        )
+
 
 class FakeFinancialSummaryService:
     async def get_summary(self, user_id: str, request: FinancialSummaryRequest) -> FinancialSummaryResponse:
         await sleep(0)
         return FinancialSummaryResponse(
-            currency="BGN",
-            exchange_rates_to_bgn={"EUR": Decimal("1.95583000")},
-            invoice_total=Decimal("156824.04"),
-            expense_total=Decimal("19.56"),
-            deductible_expense_total=Decimal("9.78"),
-            net_total=Decimal("156804.48"),
+            currency="EUR",
+            exchange_rates_to_eur={"BGN": Decimal("0.5113"), "EUR": Decimal("1")},
+            invoice_total=Decimal("80192.25"),
+            expense_total=Decimal("10.00"),
+            deductible_expense_total=Decimal("5.00"),
+            net_total=Decimal("80182.25"),
             buckets=[],
             totals_by_currency=[],
             unsupported_currencies=[],
@@ -246,9 +303,17 @@ class BusinessRouteTests(unittest.TestCase):
         self.assertEqual(created.status_code, 201)
         self.assertEqual(created.json()["id"], "company-1")
 
-        listed = self.client.get("/companies", headers=headers)
+        listed = self.client.get("/companies?limit=5&offset=0&query=Acme", headers=headers)
         self.assertEqual(listed.status_code, 200)
-        self.assertEqual(listed.json()[0]["id"], "company-1")
+        listed_payload = listed.json()
+        self.assertEqual(listed_payload["total_count"], 1)
+        self.assertEqual(listed_payload["returned_count"], 1)
+        self.assertEqual(listed_payload["offset"], 0)
+        self.assertEqual(listed_payload["limit"], 5)
+        self.assertFalse(listed_payload["truncated"])
+        self.assertIsNone(listed_payload["next_offset"])
+        self.assertEqual(listed_payload["items"][0]["id"], "company-1")
+        self.assertEqual(self.company_service.last_list_query, "Acme")
 
         deleted = self.client.delete("/companies/company-1", headers=headers)
         self.assertEqual(deleted.status_code, 409)
@@ -261,8 +326,11 @@ class BusinessRouteTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()[0]["company_id"], "company-1")
-        self.assertEqual(response.json()[0]["name"], "Client Ltd")
+        payload = response.json()
+        self.assertEqual(payload["total_count"], 1)
+        self.assertEqual(payload["returned_count"], 1)
+        self.assertEqual(payload["items"][0]["company_id"], "company-1")
+        self.assertEqual(payload["items"][0]["name"], "Client Ltd")
 
     def test_business_invoice_create_and_list(self) -> None:
         headers = {"x-user-id": "user-1"}
@@ -295,14 +363,20 @@ class BusinessRouteTests(unittest.TestCase):
 
         listed = self.client.get("/invoices?company_id=company-1", headers=headers)
         self.assertEqual(listed.status_code, 200)
-        self.assertEqual(listed.json()[0]["id"], "invoice-1")
+        payload = listed.json()
+        self.assertEqual(payload["total_count"], 1)
+        self.assertEqual(payload["returned_count"], 1)
+        self.assertEqual(payload["items"][0]["id"], "invoice-1")
 
     def test_business_expense_list(self) -> None:
-        response = self.client.get("/expenses?limit=1", headers={"x-user-id": "user-1"})
+        response = self.client.get("/expenses?company_id=company-1&limit=1", headers={"x-user-id": "user-1"})
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()[0]["id"], "expense-1")
-        self.assertEqual(response.json()[0]["category"], "office")
+        payload = response.json()
+        self.assertEqual(payload["total_count"], 1)
+        self.assertEqual(payload["returned_count"], 1)
+        self.assertEqual(payload["items"][0]["id"], "expense-1")
+        self.assertEqual(payload["items"][0]["category"], "office")
 
     def test_financial_summary_route_requires_user_id(self) -> None:
         response = self.client.post(
@@ -321,8 +395,8 @@ class BusinessRouteTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["currency"], "BGN")
-        self.assertEqual(response.json()["invoice_total"], "156824.04")
+        self.assertEqual(response.json()["currency"], "EUR")
+        self.assertEqual(response.json()["invoice_total"], "80192.25")
 
 
 if __name__ == "__main__":

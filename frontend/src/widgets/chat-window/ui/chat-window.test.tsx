@@ -3,7 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 
 import type { Conversation } from "@/entities/conversation/model/types";
-import type { ExpenseDraftResponse } from "@/entities/expense/model/types";
+import type {
+  ConfirmInventoryImportForExpenseResponse,
+  DocumentIntakeResponse,
+  ExpenseDraftResponse,
+} from "@/entities/expense/model/types";
 import type { ConfirmExtractedExpenseResponse } from "@/features/send-message/model/receipt-expense-schema";
 import { ApiError } from "@/shared/api/errors";
 import { renderWithProviders } from "@/test/test-utils";
@@ -11,7 +15,9 @@ import { renderWithProviders } from "@/test/test-utils";
 import { ChatWindow } from "./chat-window";
 
 const {
-  mockCreateExpenseDraft,
+  mockCreateDocumentIntake,
+  mockUpdateInventoryImportPreviewLines,
+  mockConfirmInventoryImportForExpense,
   mockConfirmExtractedExpense,
   mockAddNotification,
   mockConversationsQueryData,
@@ -23,7 +29,9 @@ const {
   mockGetSession,
   mockSignOut,
 } = vi.hoisted(() => ({
-  mockCreateExpenseDraft: vi.fn(),
+  mockCreateDocumentIntake: vi.fn(),
+  mockUpdateInventoryImportPreviewLines: vi.fn(),
+  mockConfirmInventoryImportForExpense: vi.fn(),
   mockConfirmExtractedExpense: vi.fn(),
   mockAddNotification: vi.fn(),
   mockConversationsQueryData: [] as Conversation[],
@@ -71,7 +79,9 @@ vi.mock("@/features/send-message/api/stream-message", () => ({
 }));
 
 vi.mock("@/features/send-message/api/receipt-expense", () => ({
-  createExpenseDraft: (input: unknown) => mockCreateExpenseDraft(input),
+  createDocumentIntake: (input: unknown) => mockCreateDocumentIntake(input),
+  updateInventoryImportPreviewLines: (input: unknown) => mockUpdateInventoryImportPreviewLines(input),
+  confirmInventoryImportForExpense: (input: unknown) => mockConfirmInventoryImportForExpense(input),
   confirmExtractedExpense: (input: unknown) => mockConfirmExtractedExpense(input),
 }));
 
@@ -122,6 +132,16 @@ const receiptDraftResponse: ExpenseDraftResponse = {
   provider: "mock",
   model: "mock",
   extracted_at: "2026-05-01T00:00:00Z",
+};
+
+const receiptIntakeResponse: DocumentIntakeResponse = {
+  ...receiptDraftResponse,
+  type: "receipt_expense_review",
+  classification: {
+    document_type: "receipt",
+    confidence: 0.9,
+    warnings: [],
+  },
 };
 
 const receiptConfirmationResponse: ConfirmExtractedExpenseResponse = {
@@ -192,6 +212,58 @@ const invoiceDraftResponse: ExpenseDraftResponse = {
   provider: "mock",
   model: "mock",
   extracted_at: "2026-05-01T00:00:00Z",
+};
+
+const supplierInvoiceInventoryReviewResponse: DocumentIntakeResponse = {
+  ...invoiceDraftResponse,
+  type: "supplier_invoice_inventory_review",
+  classification: {
+    document_type: "supplier_invoice",
+    confidence: 0.92,
+    warnings: [],
+  },
+  inventory_import_preview: {
+    id: "preview-1",
+    user_id: "u1",
+    company_id: "company-1",
+    document_id: "doc-2",
+    source_type: "supplier_invoice_upload",
+    status: "draft",
+    lines: [
+      {
+        candidate: {
+          description: "Consulting line",
+          sku: null,
+          barcode: null,
+          quantity: "1",
+          unit: "pcs",
+          unit_price: "42.00",
+        },
+        matched_item_id: null,
+        proposed_item: null,
+        location_id: "loc-1",
+        receipt_quantity: "1",
+        warnings: [],
+      },
+    ],
+    created_at: "2026-05-01T00:00:00Z",
+    updated_at: "2026-05-01T00:00:00Z",
+  },
+};
+
+const supplierInvoiceExpenseReviewAfterInventory: ConfirmInventoryImportForExpenseResponse = {
+  type: "supplier_invoice_expense_review",
+  inventory_import_result: {
+    preview_id: "preview-1",
+    items_created: 1,
+    items_updated: 0,
+    movements_created: 1,
+  },
+  inventory_import_preview: {
+    ...supplierInvoiceInventoryReviewResponse.inventory_import_preview,
+    status: "confirmed",
+  },
+  draft: invoiceDraftResponse.draft,
 };
 
 const invoiceConfirmationResponse: ConfirmExtractedExpenseResponse = {
@@ -536,7 +608,7 @@ describe("ChatWindow", () => {
   it("renders returned draft and confirms edited values; clears draft and invalidates queries", async () => {
     const user = userEvent.setup();
 
-    mockCreateExpenseDraft.mockResolvedValueOnce(receiptDraftResponse);
+    mockCreateDocumentIntake.mockResolvedValueOnce(receiptIntakeResponse);
     mockConfirmExtractedExpense.mockResolvedValueOnce({
       expense: {
         ...receiptConfirmationResponse.expense,
@@ -553,9 +625,9 @@ describe("ChatWindow", () => {
     fireEvent.change(getFileInput(), { target: { files: [file] } });
 
     await waitFor(() => {
-      expect(mockCreateExpenseDraft).toHaveBeenCalledWith(
+      expect(mockCreateDocumentIntake).toHaveBeenCalledWith(
         expect.objectContaining({
-          sourceDocumentType: "auto",
+          requestedType: "auto",
         }),
       );
     });
@@ -590,7 +662,7 @@ describe("ChatWindow", () => {
   it("API error states show notifications", async () => {
     const file = new File(["receipt"], "receipt.pdf", { type: "application/pdf" });
 
-    mockCreateExpenseDraft.mockRejectedValueOnce(new ApiError(500, "Upload failed", null));
+    mockCreateDocumentIntake.mockRejectedValueOnce(new ApiError(500, "Upload failed", null));
 
     renderWithProviders(<ChatWindow agentId="agent-1" companyId="company-1" />);
     fireEvent.change(getFileInput(), { target: { files: [file] } });
@@ -603,7 +675,15 @@ describe("ChatWindow", () => {
   it("successful invoice confirmation displays supplier partner details in message and toast", async () => {
     const user = userEvent.setup();
 
-    mockCreateExpenseDraft.mockResolvedValueOnce(invoiceDraftResponse);
+    mockCreateDocumentIntake.mockResolvedValueOnce({
+      ...invoiceDraftResponse,
+      type: "supplier_invoice_expense_review",
+      classification: {
+        document_type: "supplier_invoice",
+        confidence: 0.9,
+        warnings: [],
+      },
+    });
     mockConfirmExtractedExpense.mockResolvedValueOnce(invoiceConfirmationResponse);
 
     renderWithProviders(<ChatWindow agentId="agent-1" companyId="company-1" />);
@@ -629,24 +709,24 @@ describe("ChatWindow", () => {
   });
 
   it("shows extraction progress while document draft is pending", async () => {
-    const pendingDraft = deferred<ExpenseDraftResponse>();
-    mockCreateExpenseDraft.mockReturnValueOnce(pendingDraft.promise);
+    const pendingDraft = deferred<DocumentIntakeResponse>();
+    mockCreateDocumentIntake.mockReturnValueOnce(pendingDraft.promise);
 
     renderWithProviders(<ChatWindow agentId="agent-1" companyId="company-1" />);
     fireEvent.change(getFileInput(), {
       target: { files: [new File(["receipt"], "receipt.pdf", { type: "application/pdf" })] },
     });
 
-    expect(await screen.findByText(/reading document and extracting expense details/i)).toBeInTheDocument();
+    expect(await screen.findByText(/reading document and preparing review/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /processing document/i })).toBeDisabled();
 
-    pendingDraft.resolve(receiptDraftResponse);
+    pendingDraft.resolve(receiptIntakeResponse);
     expect(await screen.findByText(/review extracted expense/i)).toBeInTheDocument();
   });
 
   it("shows recording progress while confirmation is pending", async () => {
     const user = userEvent.setup();
-    mockCreateExpenseDraft.mockResolvedValueOnce(receiptDraftResponse);
+    mockCreateDocumentIntake.mockResolvedValueOnce(receiptIntakeResponse);
     const pendingConfirmation = deferred<ConfirmExtractedExpenseResponse>();
     mockConfirmExtractedExpense.mockReturnValueOnce(pendingConfirmation.promise);
 
@@ -666,7 +746,7 @@ describe("ChatWindow", () => {
 
   it("receipt success message includes expense details and no-partner status", async () => {
     const user = userEvent.setup();
-    mockCreateExpenseDraft.mockResolvedValueOnce(receiptDraftResponse);
+    mockCreateDocumentIntake.mockResolvedValueOnce(receiptIntakeResponse);
 
     const responseWithDeductible: ConfirmExtractedExpenseResponse = {
       expense: {
@@ -698,7 +778,7 @@ describe("ChatWindow", () => {
 
   it("keeps the draft editable when confirmation fails", async () => {
     const user = userEvent.setup();
-    mockCreateExpenseDraft.mockResolvedValueOnce(receiptDraftResponse);
+    mockCreateDocumentIntake.mockResolvedValueOnce(receiptIntakeResponse);
     mockConfirmExtractedExpense.mockRejectedValueOnce(new ApiError(500, "Unable to save", null));
 
     renderWithProviders(<ChatWindow agentId="agent-1" companyId="company-1" />);
@@ -712,6 +792,98 @@ describe("ChatWindow", () => {
     expect(await screen.findByText(/unable to save/i)).toBeInTheDocument();
     expect(screen.getByText(/review extracted expense/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /confirm expense/i })).toBeEnabled();
+  });
+
+  it("requires inventory approval before supplier invoice expense approval", async () => {
+    const user = userEvent.setup();
+    mockCreateDocumentIntake.mockResolvedValueOnce(supplierInvoiceInventoryReviewResponse);
+    mockUpdateInventoryImportPreviewLines.mockResolvedValueOnce(
+      supplierInvoiceInventoryReviewResponse.inventory_import_preview,
+    );
+    mockConfirmInventoryImportForExpense.mockResolvedValueOnce(supplierInvoiceExpenseReviewAfterInventory);
+    mockConfirmExtractedExpense.mockResolvedValueOnce(invoiceConfirmationResponse);
+
+    renderWithProviders(<ChatWindow agentId="agent-1" companyId="company-1" />);
+    fireEvent.change(getFileInput(), {
+      target: { files: [new File(["invoice"], "invoice.pdf", { type: "application/pdf" })] },
+    });
+
+    expect(await screen.findByText(/review inventory import/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /confirm inventory/i }));
+
+    await waitFor(() => {
+      expect(mockUpdateInventoryImportPreviewLines).toHaveBeenCalledWith(
+        expect.objectContaining({
+          previewId: "preview-1",
+          token: "token-1",
+          lines: expect.any(Array),
+        }),
+      );
+      expect(mockConfirmInventoryImportForExpense).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "agent-1",
+          previewId: "preview-1",
+          token: "token-1",
+        }),
+      );
+      expect(mockUpdateInventoryImportPreviewLines.mock.invocationCallOrder[0]).toBeLessThan(
+        mockConfirmInventoryImportForExpense.mock.invocationCallOrder[0],
+      );
+    });
+
+    expect(await screen.findByText(/review extracted supplier invoice expense/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /confirm expense/i }));
+
+    await waitFor(() => {
+      expect(mockAddNotification).toHaveBeenCalledWith(
+        "Expense recorded: Invoice Vendor. Supplier partner created.",
+        "success",
+      );
+    });
+  });
+
+  it("keeps user in inventory review when preview patch fails", async () => {
+    const user = userEvent.setup();
+    mockCreateDocumentIntake.mockResolvedValueOnce(supplierInvoiceInventoryReviewResponse);
+    mockUpdateInventoryImportPreviewLines.mockRejectedValueOnce(
+      new ApiError(500, "Unable to update lines", null),
+    );
+
+    renderWithProviders(<ChatWindow agentId="agent-1" companyId="company-1" />);
+    fireEvent.change(getFileInput(), {
+      target: { files: [new File(["invoice"], "invoice.pdf", { type: "application/pdf" })] },
+    });
+
+    expect(await screen.findByText(/review inventory import/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /confirm inventory/i }));
+
+    expect(await screen.findByText(/unable to update lines/i)).toBeInTheDocument();
+    expect(mockConfirmInventoryImportForExpense).not.toHaveBeenCalled();
+    expect(screen.getByText(/review inventory import/i)).toBeInTheDocument();
+  });
+
+  it("keeps user in inventory review when confirm fails after successful patch", async () => {
+    const user = userEvent.setup();
+    mockCreateDocumentIntake.mockResolvedValueOnce(supplierInvoiceInventoryReviewResponse);
+    mockUpdateInventoryImportPreviewLines.mockResolvedValueOnce(
+      supplierInvoiceInventoryReviewResponse.inventory_import_preview,
+    );
+    mockConfirmInventoryImportForExpense.mockRejectedValueOnce(
+      new ApiError(500, "Unable to confirm inventory", null),
+    );
+
+    renderWithProviders(<ChatWindow agentId="agent-1" companyId="company-1" />);
+    fireEvent.change(getFileInput(), {
+      target: { files: [new File(["invoice"], "invoice.pdf", { type: "application/pdf" })] },
+    });
+
+    expect(await screen.findByText(/review inventory import/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /confirm inventory/i }));
+
+    expect(await screen.findByText(/unable to confirm inventory/i)).toBeInTheDocument();
+    expect(mockUpdateInventoryImportPreviewLines).toHaveBeenCalledTimes(1);
+    expect(mockConfirmInventoryImportForExpense).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/review inventory import/i)).toBeInTheDocument();
   });
 
   it("redirects to login when chat stream returns unauthorized", async () => {

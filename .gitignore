@@ -53,4 +53,5 @@ data/knowledgebase/**/*.docx
 
 # Local implementation plans (kept out of git)
 plans/
+analyses/
 

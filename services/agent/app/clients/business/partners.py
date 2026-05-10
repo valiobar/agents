@@ -4,13 +4,15 @@ import hashlib
 from typing import Any
 
 from app.clients.business.base import BusinessClientError, _BusinessClientBase
-from app.models.financial.partner import PartnerCreate, PartnerKind, PartnerResponse
+from app.models.financial.partner import (
+    PartnerCreate,
+    PartnerKind,
+    PartnerListResponse,
+    PartnerResolveRequest,
+    PartnerResolveResponse,
+    PartnerResponse,
+)
 from app.models.financial.receipt import ExtractedPartnerDraft, PartnerUpsertResult
-
-
-def _normalize_partner_key(value: str | None) -> str | None:
-    normalized = " ".join(value.casefold().split()) if value else None
-    return normalized or None
 
 
 def _require_extracted(value: str | None, field_name: str) -> str:
@@ -49,7 +51,7 @@ class _PartnersClient(_BusinessClientBase):
         query: str | None,
         limit: int,
         offset: int = 0,
-    ) -> list[PartnerResponse]:
+    ) -> PartnerListResponse:
         params = {
             "company_id": company_id,
             "kind": kind,
@@ -63,7 +65,7 @@ class _PartnersClient(_BusinessClientBase):
             user_id,
             params={key: value for key, value in params.items() if value is not None},
         )
-        return [PartnerResponse.model_validate(item) for item in data]
+        return PartnerListResponse.model_validate(data)
 
     async def get_partner(
         self,
@@ -78,6 +80,10 @@ class _PartnersClient(_BusinessClientBase):
     async def create_partner(self, user_id: str, payload: PartnerCreate) -> PartnerResponse:
         data = await self._request("POST", "/partners", user_id, json=payload.model_dump(mode="json"))
         return PartnerResponse.model_validate(data)
+
+    async def resolve_partner(self, user_id: str, payload: PartnerResolveRequest) -> PartnerResolveResponse:
+        data = await self._request("POST", "/partners/resolve", user_id, json=payload.model_dump(mode="json"))
+        return PartnerResolveResponse.model_validate(data)
 
     async def update_partner(
         self,
@@ -137,25 +143,24 @@ class _PartnersClient(_BusinessClientBase):
         company_id: str,
         vendor: ExtractedPartnerDraft,
     ) -> PartnerResponse | None:
-        candidates = await self.list_partners(
-            user_id,
-            company_id=company_id,
-            kind=None,
-            query=None,
-            limit=100,
+        resolved = await self.resolve_partner(
+            user_id=user_id,
+            payload=PartnerResolveRequest(
+                company_id=company_id,
+                kind="supplier",
+                registration_number=vendor.registration_number,
+                vat_number=vendor.vat_number,
+                name=vendor.name,
+                limit=5,
+            ),
         )
-        vendor_reg = _normalize_partner_key(vendor.registration_number)
-        vendor_vat = _normalize_partner_key(vendor.vat_number)
-        vendor_name = _normalize_partner_key(vendor.name)
-
-        for partner in candidates:
-            if vendor_reg and _normalize_partner_key(partner.registration_number) == vendor_reg:
-                return partner
-            if vendor_vat and _normalize_partner_key(partner.vat_number) == vendor_vat:
-                return partner
-        for partner in candidates:
-            if vendor_name and _normalize_partner_key(partner.name) == vendor_name:
-                return partner
+        if not resolved.candidates:
+            return None
+        top_candidate = resolved.candidates[0]
+        if top_candidate.match_type in {"id", "registration_number_exact", "vat_exact"}:
+            return top_candidate.partner
+        if len(resolved.candidates) == 1 and top_candidate.score >= 0.9:
+            return top_candidate.partner
         return None
 
     async def find_or_create_supplier_partner(

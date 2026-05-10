@@ -6,11 +6,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query, status
 
+from app.common.models import ListEnvelope
 from app.dependencies import get_invoice_service, get_user_id
 from app.financial.models import InvoiceCreate, InvoiceFilters, InvoiceResponse, InvoiceStatus, InvoiceUpdate
 from app.financial.services.invoice_service import InvoiceService
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
+InvoiceListResponse = ListEnvelope[InvoiceResponse]
 
 
 @router.post("", response_model=InvoiceResponse, status_code=status.HTTP_201_CREATED)
@@ -23,7 +25,7 @@ async def create_invoice(
     return InvoiceResponse.model_validate(invoice)
 
 
-@router.get("", response_model=list[InvoiceResponse])
+@router.get("", response_model=InvoiceListResponse)
 async def list_invoices(
     user_id: Annotated[str, Depends(get_user_id)],
     service: Annotated[InvoiceService, Depends(get_invoice_service)],
@@ -50,8 +52,16 @@ async def list_invoices(
         amount_max=amount_max,
         category=category,
     )
-    invoices = await service.list_invoices(user_id, filters, limit, offset)
-    return [InvoiceResponse.model_validate(invoice) for invoice in invoices]
+    result = await service.list_invoices_envelope(user_id, filters, limit, offset)
+    return InvoiceListResponse(
+        total_count=result.total_count,
+        returned_count=result.returned_count,
+        offset=result.offset,
+        limit=result.limit,
+        truncated=result.truncated,
+        next_offset=result.next_offset,
+        items=[InvoiceResponse.model_validate(invoice) for invoice in result.items],
+    )
 
 
 @router.get("/{invoice_id}", response_model=InvoiceResponse)

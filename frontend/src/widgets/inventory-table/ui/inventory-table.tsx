@@ -2,10 +2,10 @@
 
 import { Package, RotateCcw, Search } from "lucide-react";
 import { useSession } from "next-auth/react";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useCompanies } from "@/entities/company/api/queries";
-import { useInventoryItems, useStockLevels } from "@/entities/inventory/api/queries";
+import { useInventoryItems } from "@/entities/inventory/api/queries";
 import { StockLevelBadge } from "@/entities/inventory/ui/stock-level-badge";
 import { useInventoryFiltersStore } from "@/shared/store/inventory-filters-store";
 import { Button } from "@/shared/ui/button";
@@ -25,6 +25,7 @@ import {
 const ALL_OPTION = "all";
 const CATEGORY_OPTIONS = ["electronics", "office", "raw_materials"] as const;
 const STATUS_OPTIONS = ["active", "inactive"] as const;
+const PAGE_SIZE = 20;
 
 export function InventoryTable() {
   const { data: session } = useSession();
@@ -37,57 +38,43 @@ export function InventoryTable() {
 
   const { search, category, isActive, setSearch, setCategory, setIsActive, resetFilters } =
     useInventoryFiltersStore();
+  const [page, setPage] = useState(0);
+  const normalizedSearch = search.trim();
+  const offset = page * PAGE_SIZE;
 
   const items = useInventoryItems(session?.accessToken, {
     company_id: defaultCompanyId,
+    search: normalizedSearch || undefined,
     category: category ?? undefined,
     is_active: isActive ?? undefined,
-    limit: 50,
-    offset: 0,
-  });
-
-  const levels = useStockLevels(session?.accessToken, {
-    company_id: defaultCompanyId,
+    limit: PAGE_SIZE,
+    offset,
   });
 
   useEffect(() => {
     if (!defaultCompanyId) {
       resetFilters();
+      setPage(0);
     }
   }, [defaultCompanyId, resetFilters]);
 
-  const levelByItemId = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const level of levels.data?.levels ?? []) {
-      const current = Number.parseFloat(map.get(level.item_id) ?? "0");
-      const next = Number.parseFloat(level.available_quantity);
-      map.set(level.item_id, String(current + next));
-    }
-    return map;
-  }, [levels.data]);
+  useEffect(() => {
+    setPage(0);
+  }, [defaultCompanyId, category, isActive, normalizedSearch]);
 
-  const normalizedSearch = search.trim().toLowerCase();
   let statusValue = ALL_OPTION;
   if (isActive === true) {
     statusValue = STATUS_OPTIONS[0];
   } else if (isActive === false) {
     statusValue = STATUS_OPTIONS[1];
   }
-  const filteredItems = useMemo(
-    () =>
-      (items.data?.items ?? []).filter((item) => {
-        if (!normalizedSearch) {
-          return true;
-        }
-        return (
-          item.name.toLowerCase().includes(normalizedSearch) ||
-          item.sku.toLowerCase().includes(normalizedSearch)
-        );
-      }),
-    [items.data?.items, normalizedSearch],
-  );
+  const visibleItems = items.data?.items ?? [];
+  const totalCount = items.data?.total_count ?? 0;
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const hasPreviousPage = page > 0;
+  const hasNextPage = Boolean(items.data?.next_offset);
 
-  if (companies.isLoading || items.isLoading || levels.isLoading) {
+  if (companies.isLoading || items.isLoading) {
     return (
       <div className="flex items-center justify-center py-10">
         <Spinner />
@@ -104,13 +91,13 @@ export function InventoryTable() {
     );
   }
 
-  if (items.isError || levels.isError) {
+  if (items.isError) {
     return (
       <EmptyState
         title="Unable to load inventory"
         description="Please try again in a moment."
         action={
-          <Button type="button" variant="outline" onClick={() => void Promise.all([items.refetch(), levels.refetch()])}>
+          <Button type="button" variant="outline" onClick={() => void items.refetch()}>
             Retry
           </Button>
         }
@@ -187,7 +174,7 @@ export function InventoryTable() {
         </div>
       </div>
 
-      {filteredItems.length ? (
+      {visibleItems.length ? (
         <div className="rounded-lg border">
           <Table>
             <TableHeader>
@@ -201,8 +188,8 @@ export function InventoryTable() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {filteredItems.map((item) => {
-                const availableQuantity = levelByItemId.get(item.id) ?? "0";
+              {visibleItems.map((item) => {
+                const availableQuantity = item.available_in_stock ?? "0";
                 return (
                   <TableRow key={item.id}>
                     <TableCell className="font-mono text-sm">{item.sku}</TableCell>
@@ -237,6 +224,37 @@ export function InventoryTable() {
           action={<Package className="mx-auto h-8 w-8 text-muted-foreground" />}
         />
       )}
+
+      {totalCount > 0 ? (
+        <div className="flex items-center justify-between text-sm text-muted-foreground">
+          <p>
+            Showing {offset + 1}-{Math.min(offset + visibleItems.length, totalCount)} of {totalCount} items
+          </p>
+          <div className="flex items-center gap-2">
+            <span>
+              Page {Math.min(page + 1, totalPages)} of {totalPages}
+            </span>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={!hasPreviousPage || items.isFetching}
+              onClick={() => setPage((current) => Math.max(current - 1, 0))}
+            >
+              Previous
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={!hasNextPage || items.isFetching}
+              onClick={() => setPage((current) => current + 1)}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

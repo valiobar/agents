@@ -1,3 +1,4 @@
+from app.common.models import ListEnvelope, make_list_envelope
 from app.company.models import CompanyCreate, CompanyInDB, CompanyResponse, CompanyUpdate
 from app.financial.models import (
     CurrencyCode,
@@ -27,6 +28,8 @@ from app.financial.models import (
 from app.partner.models import PartnerCreate, PartnerInDB, PartnerKind, PartnerResponse, PartnerUpdate
 
 __all__ = [
+    "ListEnvelope",
+    "make_list_envelope",
     "CompanyCreate",
     "CompanyInDB",
     "CompanyResponse",
