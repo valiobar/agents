@@ -23,6 +23,7 @@ The Business Service is the structured-data microservice for the Agent Platform.
 - Supplier invoice import preview lifecycle with draft review, confirm, and cancel flows.
 - Invoice-to-inventory integration: stock issue on `draft -> sent` transition for linked invoice lines.
 - Agent-orchestrated document-intake writes: inventory changes only on preview confirm and expenses only on explicit expense create/confirm calls.
+- Agent-orchestrated sales invoice workflows: Business remains the invoice writer and inventory authority while Agent owns the review sequence.
 - Internal company ownership validation for Agent and Knowledge through `/companies/{company_id}/exists`.
 - Startup index creation for all Business-owned collections.
 
@@ -148,6 +149,7 @@ Business centralizes cross-domain dependencies internally so external services c
 - `financial/services/invoice_service.py` depends on `company` and `partner` domains for ownership/snapshot validation and on `inventory` for stock issuing when an invoice transitions from `draft` to `sent`.
 - `inventory/services/*` depends on `company` domain ownership checks so inventory writes are always company-scoped.
 - Agent's `DocumentIntakeService` calls Business through HTTP for `/inventory/import-previews` create/confirm/get and final `/expenses` persistence; Business does not import Agent workflow code.
+- Agent's `SalesInvoiceWorkflowService` calls Business through HTTP to resolve partners, search inventory, read stock levels, and create the final invoice draft; Business does not import Agent workflow code.
 - These are in-service dependencies only; Agent and Knowledge use Business via HTTP contracts rather than importing Business modules.
 
 ## Request Context
@@ -186,6 +188,8 @@ Invoice creation requires:
 - `due_date >= issue_date` when due date is supplied.
 
 Business snapshots supplier data from the company and recipient data from the partner or inline recipient input. The snapshots preserve historical invoice rendering even when company or partner records change later.
+
+Inventory-backed invoice drafts created through Agent use the same `POST /invoices` contract as direct gateway invoice creation. Agent may include `inventory_item_id`, `inventory_location_id`, and `stock_quantity` on invoice lines after user review. Business validates the invoice payload, creates the invoice as a draft, and leaves stock unchanged until the status workflow reaches `draft -> sent`.
 
 Invoice numbers are generated atomically from `counters` with this key shape:
 
@@ -304,6 +308,7 @@ Core invariants:
 - Source-backed movements are idempotent via unique `(user_id, source_type, source_id, source_line_id)`.
 - Confirming an import preview creates/updates inventory items and records receipt movements.
 - Sending an invoice can record issue movements for lines linked to `inventory_item_id`.
+- Previewing or creating an Agent inventory-backed sales invoice does not issue stock. Stock issue remains tied to the invoice status transition from `draft` to `sent`.
 
 ## Persistence
 

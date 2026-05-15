@@ -73,6 +73,18 @@ from app.models.inventory.import_previews import (
     InventoryImportPreviewCreate,
     SupplierInvoiceLineCandidate,
 )
+from app.models.sales_invoice_workflow import (
+    ConfirmedSalesInvoiceInventoryLine,
+    ConfirmSalesInvoiceInventoryRequest,
+    ConfirmSalesInvoiceRequest,
+    CreateSalesInvoiceInventoryPreviewRequest,
+    RequestedSalesInvoiceLine,
+    ResolvedSalesInvoiceInventoryLine,
+    SalesInvoiceCreatedResponse,
+    SalesInvoiceInventoryReviewResponse,
+    SalesInvoiceReviewResponse,
+    SalesInvoiceWorkflowResponse,
+)
 
 __all__ = [
     "AgentConfig",
@@ -140,4 +152,14 @@ __all__ = [
     "ImportSourceType",
     "InventoryImportPreviewCreate",
     "SupplierInvoiceLineCandidate",
+    "ConfirmedSalesInvoiceInventoryLine",
+    "ConfirmSalesInvoiceInventoryRequest",
+    "ConfirmSalesInvoiceRequest",
+    "CreateSalesInvoiceInventoryPreviewRequest",
+    "RequestedSalesInvoiceLine",
+    "ResolvedSalesInvoiceInventoryLine",
+    "SalesInvoiceCreatedResponse",
+    "SalesInvoiceInventoryReviewResponse",
+    "SalesInvoiceReviewResponse",
+    "SalesInvoiceWorkflowResponse",
 ]

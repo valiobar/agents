@@ -102,6 +102,14 @@ class ChatService:
             return route_metadata
         return None
 
+    def _workflow_suggestion_payload(self, runtime: BaseAgent) -> dict | None:
+        suggestion = runtime.workflow_suggestion
+        if suggestion is None:
+            return None
+        if isinstance(suggestion, dict):
+            return suggestion
+        return None
+
     async def stream_chat(
         self,
         user_id: str,
@@ -203,6 +211,10 @@ class ChatService:
         route_payload = self._route_metadata_payload(runtime)
         if route_payload is not None:
             yield sse("route", route_payload)
+
+        workflow_suggestion_payload = self._workflow_suggestion_payload(runtime)
+        if workflow_suggestion_payload is not None:
+            yield sse("workflow_suggestion", workflow_suggestion_payload)
 
         for ui_event_name, ui_payload in runtime.consume_ui_events():
             if ui_event_name == "tool_trace" and not settings.should_emit_tool_traces:

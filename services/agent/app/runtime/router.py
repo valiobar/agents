@@ -19,6 +19,15 @@ from app.runtime.base_agent import BaseAgent
 from app.runtime.loop_logging import AgentLoopLogger, LLMTraceState, event_data, stringify_chunk_content
 from app.runtime.tool_context import ToolContext
 from app.runtime.usage import LLMUsageEvent
+from app.runtime.workflow_suggestion import (
+    SalesInvoiceWorkflowPrefill,
+    SalesInvoiceWorkflowSuggestion,
+    WorkflowSuggestion,
+    WORKFLOW_SUGGESTION_CONFIDENCE_THRESHOLD,
+    build_sales_invoice_workflow_suggestion,
+    infer_sales_invoice_prefill,
+    message_mentions_stock_backed_invoice,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,16 +44,48 @@ Rules:
 3. Respect company scope. Do not invent business facts (invoice amounts, stock quantities, partner names, IDs, or documents that are not stated in the conversation).
 4. If unsure between accountant and inventory, use the dominant nouns.
 5. Never invent or assume company-specific data beyond the routing context identifiers provided.
+6. For sales invoice creation intent with product/goods/service lines, classify as
+   finance workflow intent and include `sales_invoice_workflow` prefill data so
+   ChatService can emit a `workflow_suggestion` for `sales_invoice_inventory`.
+   This applies even when the user does not say "inventory", "stock", "warehouse",
+   or "SKU". Examples include "Create an invoice for 2x Bernard beer for Acme"
+   and Bulgarian requests like "направи фактура към Донка Баракова за 10 бири
+   Бернард". Extract partner, quantity, product query/description, currency, and
+   price when present; if details are missing, still set `sales_invoice_workflow`
+   with the available partial prefill.
+7. The router does not create invoices and does not call workflow endpoints directly. It only routes and provides suggestion metadata.
+8. Never imply the preview/workflow has already started; frontend kickoff requires explicit user confirmation.
 """
 
 Route = Literal["accountant", "inventory", "general"]
 CompanyScope = Literal["assigned", "unassigned"]
 
 
+class SalesInvoicePrefillLine(BaseModel):
+    query: str = Field(min_length=1, max_length=500)
+    description: str | None = Field(default=None, max_length=500)
+    quantity: str = Field(min_length=1, max_length=32)
+    unit_price: str | None = Field(default=None, max_length=32)
+    vat_rate: str | None = Field(default=None, max_length=32)
+
+
+class SalesInvoiceClassifierPrefill(BaseModel):
+    partner_query: str | None = Field(default=None, max_length=200)
+    currency: str | None = Field(default=None, max_length=3)
+    lines: list[SalesInvoicePrefillLine] = Field(default_factory=list)
+
+
 class RouterDecision(BaseModel):
     route: Route = Field(description="Specialist that should handle this user turn.")
     reason: str = Field(min_length=1, max_length=300)
     confidence: float = Field(ge=0.0, le=1.0)
+    sales_invoice_workflow: SalesInvoiceClassifierPrefill | None = Field(
+        default=None,
+        description=(
+            "Optional structured prefill when the user intends to create a sales invoice "
+            "from product/goods/service lines. Presence of this object is the workflow intent signal."
+        ),
+    )
 
 
 ROUTER_CLASSIFICATION_FALLBACK = RouterDecision(
@@ -73,6 +114,7 @@ class RouterGraphState(TypedDict, total=False):
     route: Route
     route_reason: str
     confidence: float
+    workflow_suggestion: SalesInvoiceWorkflowPrefill
     answer: str
     tokens: list[str]
     usage_events: list[LLMUsageEvent]
@@ -175,6 +217,48 @@ async def _invoke_general_with_usage(
     fallback = await llm.ainvoke(messages)
     text = stringify_chunk_content(getattr(fallback, "content", None))
     return text or str(fallback)
+
+
+def _classifier_prefill_to_runtime_prefill(
+    prefill: SalesInvoiceClassifierPrefill | None,
+) -> SalesInvoiceWorkflowPrefill | None:
+    if prefill is None:
+        return None
+
+    lines = [
+        {
+            "description": line.description or line.query,
+            "query": line.query,
+            "quantity": line.quantity,
+            **({"unit_price": line.unit_price} if line.unit_price else {}),
+            **({"vat_rate": line.vat_rate} if line.vat_rate else {}),
+        }
+        for line in prefill.lines
+    ]
+    runtime_prefill: SalesInvoiceWorkflowPrefill = {"lines": lines}
+    if prefill.partner_query:
+        runtime_prefill["partner_query"] = prefill.partner_query
+    if prefill.currency:
+        runtime_prefill["currency"] = prefill.currency
+    return runtime_prefill
+
+
+def _resolve_sales_invoice_workflow_prefill(
+    *,
+    message: str,
+    predicted_route: Route,
+    confidence: float,
+    classifier_prefill: SalesInvoiceClassifierPrefill | None,
+) -> SalesInvoiceWorkflowPrefill | None:
+    if predicted_route not in {"accountant", "inventory"}:
+        return None
+    if confidence < WORKFLOW_SUGGESTION_CONFIDENCE_THRESHOLD:
+        return None
+
+    if classifier_prefill is not None:
+        return _classifier_prefill_to_runtime_prefill(classifier_prefill) or {"lines": []}
+
+    return infer_sales_invoice_prefill(message)
 
 
 def _available_route(router: _RouterGraphRuntime, predicted: Route) -> Route:
@@ -306,13 +390,22 @@ def build_router_graph(router: _RouterGraphRuntime):
         executed = _available_route(router, decision.route)
         usage_events = list(state.get("usage_events", []))
         usage_events.extend(collector.consume())
-        return {
+        workflow_prefill = _resolve_sales_invoice_workflow_prefill(
+            message=state["message"],
+            predicted_route=decision.route,
+            confidence=decision.confidence,
+            classifier_prefill=decision.sales_invoice_workflow,
+        )
+        result: RouterGraphState = {
             "predicted_route": decision.route,
             "route": executed,
             "route_reason": decision.reason,
             "confidence": decision.confidence,
             "usage_events": usage_events,
         }
+        if workflow_prefill is not None:
+            result["workflow_suggestion"] = workflow_prefill
+        return result
 
     async def accountant_node(state: RouterGraphState) -> RouterGraphState:
         child = router.accountant_runtime
@@ -374,6 +467,11 @@ class RouterAgent(BaseAgent):
         self.inventory_runtime: BaseAgent | None = None
         self.fallback_llm: BaseChatModel = llm
         self.route_metadata: RouteMetadata | None = None
+        self._workflow_suggestion: SalesInvoiceWorkflowSuggestion | None = None
+
+    @property
+    def workflow_suggestion(self) -> WorkflowSuggestion | None:
+        return self._workflow_suggestion
 
     def configure_children(
         self,
@@ -407,6 +505,7 @@ class RouterAgent(BaseAgent):
         history: list[MessageSchema],
     ) -> AsyncIterator[str]:
         self.route_metadata = None
+        self._workflow_suggestion = None
         company_scope: CompanyScope = "assigned" if self.agent.company_id else "unassigned"
 
         graph = build_router_graph(self)
@@ -428,6 +527,14 @@ class RouterAgent(BaseAgent):
             company_id=self.agent.company_id,
             company_scope=company_scope,
         )
+
+        workflow_prefill = final_state.get("workflow_suggestion")
+        if workflow_prefill is not None:
+            self._workflow_suggestion = build_sales_invoice_workflow_suggestion(
+                confidence=final_state["confidence"],
+                reason=final_state["route_reason"],
+                prefill=workflow_prefill,
+            )
 
         usage_events = final_state.get("usage_events") or []
         if usage_events:

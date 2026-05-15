@@ -12,6 +12,8 @@
 | Stock, item, warehouse/location, movement, low-stock, reorder, or supplier import-preview questions | `inventory` | Delegates to `InventoryAgent` when a compatible child runtime exists. |
 | Greetings, platform help, unsupported requests, or missing specialist runtime | `general` | Uses the router LLM with a no-tool general prompt. |
 
+The router can also emit a non-persistent `workflow_suggestion` for inventory-backed sales invoice requests. The suggestion only offers frontend kickoff metadata; it does not call invoice workflow endpoints, start preview, create invoices, or reserve stock. See `docs/workflows/chat-workflow-suggestions.md` and `docs/workflows/sales-invoice-inventory.md`.
+
 The router is selected by creating an agent with `agent_type: "router"`. The frontend create-agent form exposes Router alongside Accountant and Inventory and lowers the default temperature to `0.1` when the user selects Router from the untouched default.
 
 ## Graph
@@ -85,6 +87,25 @@ Payload fields:
 | `company_scope` | `assigned` \| `unassigned` | Human-readable scope state. |
 
 Frontend `shared/api/sse.ts` types this event as `RouteMetadata`, and `widgets/chat-window` accepts it without rendering a new visible chat message.
+
+### Workflow Suggestion Metadata
+
+When the classifier detects an inventory-backed sales invoice intent with confidence at least `0.85`, the router may expose a `sales_invoice_inventory` suggestion. `ChatService` emits it after `route` and before `done`:
+
+```text
+event: workflow_suggestion
+data: {"workflow":"sales_invoice_inventory","confidence":0.94,"reason":"The user requested a stock-backed customer invoice.","prefill":{"partner_query":"Acme","lines":[{"description":"Widget","query":"Widget","quantity":"2"}]}}
+```
+
+The frontend validates the event with `features/send-message/model/chat-suggestion-schema.ts`. Unknown workflow names or invalid payloads are ignored.
+
+The sales invoice workflow itself is still executed by explicit Agent workflow endpoints:
+
+1. `POST /agents/{agent_id}/invoice-workflows/sales-inventory/preview`
+2. `POST /agents/{agent_id}/invoice-workflows/sales-inventory/inventory/confirm`
+3. `POST /agents/{agent_id}/invoice-workflows/sales-inventory/invoice/confirm`
+
+The Router should prefer emitting the suggestion when the request mentions both customer invoicing and stock/inventory fulfillment. Low-confidence or incomplete requests should stay as normal chat guidance until the user supplies enough partner or line detail.
 
 ## Usage Attribution
 
@@ -161,6 +182,9 @@ data: {"content":"..."}
 
 event: route
 data: {"predicted_route":"inventory","executed_route":"inventory","reason":"...","confidence":0.95,"company_id":"...","company_scope":"assigned"}
+
+event: workflow_suggestion
+data: {"workflow":"sales_invoice_inventory","confidence":0.95,"reason":"...","prefill":{"lines":[]}}
 
 event: done
 data: {"conversation_id":"..."}

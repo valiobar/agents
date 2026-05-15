@@ -92,6 +92,9 @@ All client calls go through the API Gateway at `http://localhost:8000`. Internal
 | `POST /agents/{agent_id}/chat` | Implemented | Stream chat response via SSE |
 | `POST /agents/{agent_id}/document-intake` | Implemented | Classify/extract upload and return workflow review union |
 | `POST /agents/{agent_id}/document-intake/supplier-invoice/inventory-imports/confirm` | Implemented | Confirm inventory import stage and continue supplier invoice flow |
+| `POST /agents/{agent_id}/invoice-workflows/sales-inventory/preview` | Implemented | Resolve partner and inventory candidates for a stock-backed sales invoice |
+| `POST /agents/{agent_id}/invoice-workflows/sales-inventory/inventory/confirm` | Implemented | Validate selected inventory and return an invoice draft review |
+| `POST /agents/{agent_id}/invoice-workflows/sales-inventory/invoice/confirm` | Implemented | Persist the reviewed invoice through Business Service |
 | `POST /agents/{agent_id}/expense-drafts` | Implemented (compatibility) | Legacy receipt draft endpoint kept for older clients |
 | `POST /agents/{agent_id}/expenses/confirm` | Implemented | Final explicit approval endpoint that records expense |
 | `GET /conversations/{conversation_id}` | Implemented | Load persisted conversation history |
@@ -172,6 +175,7 @@ Set `AGENT_ENV=development` for the Agent Service to log LangChain tool start, e
 | `start` | `{ "conversation_id": "..." }` | Runtime initialization succeeded and token streaming is starting. |
 | `token` | `{ "content": "..." }` | A streamed assistant token or chunk is available. |
 | `route` | `{ "predicted_route": "inventory", "executed_route": "inventory", "reason": "...", "confidence": 0.95, "company_id": "...", "company_scope": "assigned" }` | Router-only metadata emitted after persistence and before `done`. |
+| `workflow_suggestion` | `{ "workflow": "sales_invoice_inventory", "confidence": 0.94, "reason": "...", "prefill": { ... } }` | Router-only workflow kickoff suggestion emitted after `route` and before `done`. |
 | `error` | `{ "message": "..." }` | Agent lookup, conversation lookup, provider setup, runtime execution, or message persistence failed. |
 | `done` | `{ "conversation_id": "..." }` | Runtime completed and user/assistant messages were persisted. |
 
@@ -190,11 +194,14 @@ data: {"content":"20% VAT on 100 is "}
 event: route
 data: {"predicted_route":"accountant","executed_route":"accountant","reason":"VAT question","confidence":0.94,"company_id":"665f1f77c9e0f7a8093bb701","company_scope":"assigned"}
 
+event: workflow_suggestion
+data: {"workflow":"sales_invoice_inventory","confidence":0.94,"reason":"Stock-backed invoice request","prefill":{"partner_query":"Acme","lines":[]}}
+
 event: done
 data: {"conversation_id":"665f1f77c9e0f7a8093bb711"}
 ```
 
-Non-router chats do not emit `route`. Clients should tolerate optional metadata events and continue using `token` and `done` as the user-visible completion contract.
+Non-router chats do not emit `route` or `workflow_suggestion`. Clients should tolerate optional metadata events and continue using `token` and `done` as the user-visible completion contract. Workflow-specific diagrams and state machines live in `docs/workflows/`.
 
 ## Configuration
 

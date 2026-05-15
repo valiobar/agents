@@ -91,12 +91,18 @@ class FakeRuntime:
         *,
         token: str = "ok",
         route_metadata: dict | None = None,
+        workflow_suggestion: dict | None = None,
         ui_events: list[tuple[str, dict]] | None = None,
     ) -> None:
         self.token = token
         self.route_metadata = route_metadata
+        self._workflow_suggestion = workflow_suggestion
         self._usage_events: list[LLMUsageEvent] = []
         self._ui_events = ui_events or []
+
+    @property
+    def workflow_suggestion(self) -> dict | None:
+        return self._workflow_suggestion
 
     async def run(self, message, history):
         yield self.token
@@ -250,6 +256,62 @@ class RouterChatServiceTests(unittest.IsolatedAsyncioTestCase):
             events = [chunk async for chunk in service.stream_chat("user-1", "router-1", ChatRequest(message="stock?"))]
 
         self.assertFalse(any(event.startswith("event: tool_trace") for event in events))
+
+    async def test_stream_chat_emits_workflow_suggestion_before_done(self) -> None:
+        router_agent = fake_agent(agent_id="router-1", agent_type="router", company_id="company-1")
+        runtime = FakeRuntime(
+            token="I can start a reviewed workflow.",
+            workflow_suggestion={
+                "workflow": "sales_invoice_inventory",
+                "confidence": 0.92,
+                "reason": "User asked to invoice stock items.",
+                "prefill": {
+                    "partner_query": "Acme",
+                    "lines": [{"description": "SKU-1", "query": "SKU-1", "quantity": "2"}],
+                },
+            },
+        )
+
+        agent_repo = AsyncMock()
+        agent_repo.get_by_id = AsyncMock(return_value=router_agent)
+        conversation_repo = AsyncMock()
+        conversation_repo.create = AsyncMock(return_value=fake_conversation("router-1", company_id="company-1"))
+        conversation_repo.append_messages = AsyncMock(return_value=object())
+        usage_repo = AsyncMock()
+        usage_repo.insert_many = AsyncMock(return_value=0)
+        service = ChatService(agent_repo, conversation_repo, usage_repo, object())
+
+        with patch.object(service, "_create_runtime", new=AsyncMock(return_value=runtime)):
+            events = [
+                chunk
+                async for chunk in service.stream_chat(
+                    "user-1",
+                    "router-1",
+                    ChatRequest(message="Invoice 2x SKU-1 for Acme"),
+                )
+            ]
+
+        suggestion_idx = next(i for i, item in enumerate(events) if item.startswith("event: workflow_suggestion"))
+        done_idx = next(i for i, item in enumerate(events) if item.startswith("event: done"))
+        self.assertLess(suggestion_idx, done_idx)
+
+    async def test_stream_chat_omits_workflow_suggestion_when_absent(self) -> None:
+        router_agent = fake_agent(agent_id="router-1", agent_type="router", company_id="company-1")
+        runtime = FakeRuntime(token="Hello")
+
+        agent_repo = AsyncMock()
+        agent_repo.get_by_id = AsyncMock(return_value=router_agent)
+        conversation_repo = AsyncMock()
+        conversation_repo.create = AsyncMock(return_value=fake_conversation("router-1", company_id="company-1"))
+        conversation_repo.append_messages = AsyncMock(return_value=object())
+        usage_repo = AsyncMock()
+        usage_repo.insert_many = AsyncMock(return_value=0)
+        service = ChatService(agent_repo, conversation_repo, usage_repo, object())
+
+        with patch.object(service, "_create_runtime", new=AsyncMock(return_value=runtime)):
+            events = [chunk async for chunk in service.stream_chat("user-1", "router-1", ChatRequest(message="Hi"))]
+
+        self.assertFalse(any(event.startswith("event: workflow_suggestion") for event in events))
 
 
 if __name__ == "__main__":

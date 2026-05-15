@@ -18,3 +18,13 @@ export interface Partner {
   created_at: string;
   updated_at: string;
 }
+
+export interface PartnerListResponse {
+  total_count: number;
+  returned_count: number;
+  offset: number;
+  limit: number;
+  truncated: boolean;
+  next_offset: number | null;
+  items: Partner[];
+}

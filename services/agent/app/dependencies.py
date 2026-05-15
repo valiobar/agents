@@ -20,6 +20,7 @@ from app.services.document_intake_service import (
     create_document_workflow_registry,
 )
 from app.services.receipt_service import ReceiptService
+from app.services.sales_invoice_workflow_service import SalesInvoiceWorkflowService
 from app.utils.db import get_database
 
 
@@ -85,6 +86,13 @@ def get_document_intake_service(
         business_client=business_client,
         workflows=create_document_workflow_registry(),
     )
+
+
+def get_sales_invoice_workflow_service(
+    agent_repo: AgentRepository = Depends(get_agent_repo),
+    business_client: BusinessClient = Depends(get_business_client),
+) -> SalesInvoiceWorkflowService:
+    return SalesInvoiceWorkflowService(agent_repo=agent_repo, business_client=business_client)
 
 
 def get_receipt_service(

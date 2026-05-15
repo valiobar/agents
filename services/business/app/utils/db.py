@@ -2,16 +2,69 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo import ASCENDING, DESCENDING
 from pymongo.errors import OperationFailure
 
+from app.common.search import build_search_text, normalize_search_key, normalize_search_text
 from app.config import settings
 
 client: AsyncIOMotorClient | None = None
+EXISTS_OPERATOR = "$exists"
 
 
 async def connect_db() -> None:
     global client
     client = AsyncIOMotorClient(settings.mongodb_url)
     await client.admin.command("ping")
+    await backfill_search_normalized_fields()
     await ensure_indexes()
+
+
+async def backfill_search_normalized_fields() -> None:
+    db = get_database()
+    await _backfill_party_search_fields(db, "companies")
+    await _backfill_party_search_fields(db, "partners")
+    await _backfill_counterparty_search_fields(db, "invoices")
+    await _backfill_counterparty_search_fields(db, "expenses")
+
+
+async def _backfill_party_search_fields(db: AsyncIOMotorDatabase, collection_name: str) -> None:
+    collection = db[collection_name]
+    missing_filter = {
+        "$or": [
+            {"name_normalized": {EXISTS_OPERATOR: False}},
+            {"registration_number_normalized": {EXISTS_OPERATOR: False}},
+            {"vat_number_normalized": {EXISTS_OPERATOR: False}},
+            {"search_text": {EXISTS_OPERATOR: False}},
+        ]
+    }
+    projection = {"name": 1, "registration_number": 1, "vat_number": 1}
+
+    async for doc in collection.find(missing_filter, projection):
+        name_normalized = normalize_search_text(doc.get("name"))
+        registration_number_normalized = normalize_search_key(doc.get("registration_number"))
+        vat_number_normalized = normalize_search_key(doc.get("vat_number"))
+        search_text = build_search_text(name_normalized, registration_number_normalized, vat_number_normalized)
+        await collection.update_one(
+            {"_id": doc["_id"]},
+            {
+                "$set": {
+                    "name_normalized": name_normalized,
+                    "registration_number_normalized": registration_number_normalized,
+                    "vat_number_normalized": vat_number_normalized,
+                    "search_text": search_text,
+                }
+            },
+        )
+
+
+async def _backfill_counterparty_search_fields(db: AsyncIOMotorDatabase, collection_name: str) -> None:
+    collection = db[collection_name]
+    async for doc in collection.find(
+        {"counterparty_normalized": {EXISTS_OPERATOR: False}},
+        {"counterparty": 1},
+    ):
+        await collection.update_one(
+            {"_id": doc["_id"]},
+            {"$set": {"counterparty_normalized": normalize_search_text(doc.get("counterparty"))}},
+        )
 
 
 async def ensure_indexes() -> None:
@@ -150,7 +203,6 @@ async def ensure_indexes() -> None:
     )
     # Keep source idempotency for generated movements, but do not index manual movements
     # that omit source fields.
-    exists_operator = "$exists"
     stock_movement_source_index_name = "stock_movements_source_unique"
     stock_movement_source_index_keys = [
         ("user_id", ASCENDING),
@@ -159,9 +211,9 @@ async def ensure_indexes() -> None:
         ("source_line_id", ASCENDING),
     ]
     stock_movement_source_index_partial = {
-        "source_type": {exists_operator: True},
-        "source_id": {exists_operator: True},
-        "source_line_id": {exists_operator: True},
+        "source_type": {EXISTS_OPERATOR: True},
+        "source_id": {EXISTS_OPERATOR: True},
+        "source_line_id": {EXISTS_OPERATOR: True},
     }
     try:
         await db["stock_movements"].create_index(

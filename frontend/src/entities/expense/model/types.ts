@@ -148,3 +148,13 @@ export interface Expense {
   created_at: string;
   updated_at: string;
 }
+
+export interface ExpenseListResponse {
+  total_count: number;
+  returned_count: number;
+  offset: number;
+  limit: number;
+  truncated: boolean;
+  next_offset: number | null;
+  items: Expense[];
+}

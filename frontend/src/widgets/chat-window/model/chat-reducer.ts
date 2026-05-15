@@ -7,6 +7,44 @@ import type {
 } from "@/entities/expense/model/types";
 import type { InventoryImportPreview } from "@/entities/inventory/model/types";
 import type { ToolTracePayload } from "@/shared/api/sse";
+import type {
+  SalesInvoiceCreatedResponse,
+  SalesInvoiceInventoryReview,
+  SalesInvoiceReview,
+} from "@/features/send-message/model/sales-invoice-workflow-schema";
+import type { SalesInvoiceWorkflowSuggestion } from "@/features/send-message/model/chat-suggestion-schema";
+
+interface SalesInvoiceActiveWorkflow {
+  workflow: "sales_invoice_inventory";
+  step:
+    | "loading_inventory"
+    | "inventory_review"
+    | "confirming_inventory"
+    | "invoice_review"
+    | "confirming_invoice"
+    | "created"
+    | "error";
+  payload: SalesInvoiceInventoryReview | SalesInvoiceReview | SalesInvoiceCreatedResponse | null;
+  error: string | null;
+}
+
+interface SalesWorkflowState {
+  salesInvoiceSuggestion: SalesInvoiceWorkflowSuggestion | null;
+  activeWorkflow: SalesInvoiceActiveWorkflow | null;
+  salesInvoiceStatus:
+    | "idle"
+    | "loading_sales_invoice_inventory"
+    | "sales_invoice_inventory_ready"
+    | "confirming_sales_invoice_inventory"
+    | "sales_invoice_ready"
+    | "confirming_sales_invoice"
+    | "sales_invoice_confirmed"
+    | "error";
+  salesInvoiceInventoryReview: SalesInvoiceInventoryReview | null;
+  salesInvoiceDraft: SalesInvoiceReview | null;
+  salesInvoiceCreated: SalesInvoiceCreatedResponse | null;
+  salesInvoiceError: string | null;
+}
 
 export interface ChatState {
   messages: Message[];
@@ -29,6 +67,30 @@ export interface ChatState {
   unknownDocumentReview: UnknownDocumentReviewResponse | null;
   documentReviewError: string | null;
   toolTraces: ToolTracePayload[];
+  activeWorkflow: SalesInvoiceActiveWorkflow | null;
+  salesInvoiceStatus: SalesWorkflowState["salesInvoiceStatus"];
+  salesInvoiceInventoryReview: SalesInvoiceInventoryReview | null;
+  salesInvoiceDraft: SalesInvoiceReview | null;
+  salesInvoiceCreated: SalesInvoiceCreatedResponse | null;
+  salesInvoiceError: string | null;
+  salesInvoiceSuggestion: SalesInvoiceWorkflowSuggestion | null;
+}
+
+const initialSalesWorkflowState: SalesWorkflowState = {
+  salesInvoiceSuggestion: null,
+  activeWorkflow: null,
+  salesInvoiceStatus: "idle",
+  salesInvoiceInventoryReview: null,
+  salesInvoiceDraft: null,
+  salesInvoiceCreated: null,
+  salesInvoiceError: null,
+};
+
+function clearSalesWorkflowState(overrides?: Partial<SalesWorkflowState>): SalesWorkflowState {
+  return {
+    ...initialSalesWorkflowState,
+    ...overrides,
+  };
 }
 
 export type ChatAction =
@@ -61,7 +123,19 @@ export type ChatAction =
   | {
       type: "EXPENSE_CONFIRMATION_SUCCEEDED";
       payload: { content: string; createdAt?: string };
-    };
+    }
+  | { type: "SALES_INVOICE_PREVIEW_LOADING" }
+  | { type: "SALES_INVOICE_SUGGESTION_READY"; payload: SalesInvoiceWorkflowSuggestion }
+  | { type: "SALES_INVOICE_SUGGESTION_DISMISSED" }
+  | { type: "SALES_INVOICE_INVENTORY_READY"; payload: SalesInvoiceInventoryReview }
+  | { type: "SALES_INVOICE_PREVIEW_FAILED"; payload: string }
+  | { type: "SALES_INVOICE_INVENTORY_CONFIRMING" }
+  | { type: "SALES_INVOICE_READY"; payload: SalesInvoiceReview }
+  | { type: "SALES_INVOICE_INVENTORY_CONFIRMATION_FAILED"; payload: string }
+  | { type: "SALES_INVOICE_CONFIRMING" }
+  | { type: "SALES_INVOICE_CONFIRMATION_SUCCEEDED"; payload: SalesInvoiceCreatedResponse }
+  | { type: "SALES_INVOICE_CONFIRMATION_FAILED"; payload: string }
+  | { type: "SALES_INVOICE_CLEAR" };
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
@@ -78,6 +152,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         unknownDocumentReview: null,
         documentReviewError: null,
         toolTraces: [],
+        ...clearSalesWorkflowState(),
       };
     case "RESET":
       return {
@@ -91,9 +166,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         unknownDocumentReview: null,
         documentReviewError: null,
         toolTraces: [],
+        ...clearSalesWorkflowState(),
       };
     case "SEND_MESSAGE": {
       const clearConfirmedDraft = state.documentReviewStatus === "confirmed";
+      const clearConfirmedSalesInvoice = state.salesInvoiceStatus === "sales_invoice_confirmed";
       return {
         ...state,
         messages: [
@@ -117,10 +194,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
               documentReviewError: null,
             }
           : {}),
+        ...(clearConfirmedSalesInvoice ? clearSalesWorkflowState() : {}),
       };
     }
     case "STREAM_TOKEN":
-      console.log("STREAM_TOKEN", action.payload);
       return {
         ...state,
         streamingContent: state.streamingContent + action.payload,
@@ -284,6 +361,140 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         ],
         documentReviewStatus: "confirmed",
         documentReviewError: null,
+      };
+    case "SALES_INVOICE_PREVIEW_LOADING":
+      return {
+        ...state,
+        ...clearSalesWorkflowState({
+          salesInvoiceSuggestion: state.salesInvoiceSuggestion,
+          activeWorkflow: {
+            workflow: "sales_invoice_inventory",
+            step: "loading_inventory",
+            payload: null,
+            error: null,
+          },
+          salesInvoiceStatus: "loading_sales_invoice_inventory",
+        }),
+      };
+    case "SALES_INVOICE_INVENTORY_READY":
+      return {
+        ...state,
+        ...clearSalesWorkflowState({
+          salesInvoiceSuggestion: state.salesInvoiceSuggestion,
+          activeWorkflow: {
+            workflow: "sales_invoice_inventory",
+            step: "inventory_review",
+            payload: action.payload,
+            error: null,
+          },
+          salesInvoiceStatus: "sales_invoice_inventory_ready",
+          salesInvoiceInventoryReview: action.payload,
+        }),
+      };
+    case "SALES_INVOICE_PREVIEW_FAILED":
+      return {
+        ...state,
+        ...clearSalesWorkflowState({
+          salesInvoiceSuggestion: state.salesInvoiceSuggestion,
+          activeWorkflow: {
+            workflow: "sales_invoice_inventory",
+            step: "error",
+            payload: null,
+            error: action.payload,
+          },
+          salesInvoiceStatus: "error",
+          salesInvoiceError: action.payload,
+        }),
+      };
+    case "SALES_INVOICE_SUGGESTION_READY":
+      return {
+        ...state,
+        salesInvoiceSuggestion: action.payload,
+      };
+    case "SALES_INVOICE_SUGGESTION_DISMISSED":
+      return {
+        ...state,
+        salesInvoiceSuggestion: null,
+      };
+    case "SALES_INVOICE_INVENTORY_CONFIRMING":
+      return {
+        ...state,
+        salesInvoiceStatus: "confirming_sales_invoice_inventory",
+        activeWorkflow: {
+          workflow: "sales_invoice_inventory",
+          step: "confirming_inventory",
+          payload: state.salesInvoiceInventoryReview,
+          error: null,
+        },
+        salesInvoiceError: null,
+      };
+    case "SALES_INVOICE_READY":
+      return {
+        ...state,
+        salesInvoiceStatus: "sales_invoice_ready",
+        salesInvoiceDraft: action.payload,
+        salesInvoiceCreated: null,
+        salesInvoiceError: null,
+        activeWorkflow: {
+          workflow: "sales_invoice_inventory",
+          step: "invoice_review",
+          payload: action.payload,
+          error: null,
+        },
+      };
+    case "SALES_INVOICE_INVENTORY_CONFIRMATION_FAILED":
+      return {
+        ...state,
+        salesInvoiceStatus: "sales_invoice_inventory_ready",
+        salesInvoiceError: action.payload,
+        activeWorkflow: {
+          workflow: "sales_invoice_inventory",
+          step: "inventory_review",
+          payload: state.salesInvoiceInventoryReview,
+          error: action.payload,
+        },
+      };
+    case "SALES_INVOICE_CONFIRMING":
+      return {
+        ...state,
+        salesInvoiceStatus: "confirming_sales_invoice",
+        salesInvoiceError: null,
+        activeWorkflow: {
+          workflow: "sales_invoice_inventory",
+          step: "confirming_invoice",
+          payload: state.salesInvoiceDraft,
+          error: null,
+        },
+      };
+    case "SALES_INVOICE_CONFIRMATION_SUCCEEDED":
+      return {
+        ...state,
+        salesInvoiceStatus: "sales_invoice_confirmed",
+        salesInvoiceCreated: action.payload,
+        salesInvoiceError: null,
+        activeWorkflow: {
+          workflow: "sales_invoice_inventory",
+          step: "created",
+          payload: action.payload,
+          error: null,
+        },
+      };
+    case "SALES_INVOICE_CONFIRMATION_FAILED":
+      return {
+        ...state,
+        salesInvoiceStatus: "sales_invoice_ready",
+        salesInvoiceError: action.payload,
+        activeWorkflow: {
+          workflow: "sales_invoice_inventory",
+          step: "invoice_review",
+          payload: state.salesInvoiceDraft,
+          error: action.payload,
+        },
+      };
+    case "SALES_INVOICE_CLEAR":
+      return {
+        ...state,
+        ...clearSalesWorkflowState(),
       };
     default:
       return state;

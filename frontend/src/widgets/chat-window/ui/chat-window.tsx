@@ -8,9 +8,15 @@ import { useConversation, useConversations } from "@/entities/conversation/api/q
 import { getConversationDisplayTitle } from "@/entities/conversation/model/display-title";
 import { MessageList } from "@/entities/conversation/ui/message-list";
 import { expenseKeys } from "@/entities/expense/model/query-keys";
+import { invoiceKeys } from "@/entities/invoice/model/query-keys";
 import { inventoryKeys } from "@/entities/inventory/model/query-keys";
 import { partnerKeys } from "@/entities/partner/model/query-keys";
 import { streamAgentMessage } from "@/features/send-message/api/stream-message";
+import {
+  confirmSalesInvoiceDraft,
+  confirmSalesInvoiceInventoryReview,
+  createSalesInvoiceInventoryPreview,
+} from "@/features/send-message/api/sales-invoice-workflow";
 import {
   confirmExtractedExpense,
   confirmInventoryImportForExpense,
@@ -19,11 +25,27 @@ import {
 } from "@/features/send-message/api/receipt-expense";
 import { ExpenseDraftConfirmation } from "@/features/send-message/ui/expense-draft-confirmation";
 import { MessageInput } from "@/features/send-message/ui/message-input";
+import { SalesInvoiceDraftConfirmation } from "@/features/send-message/ui/sales-invoice-draft-confirmation";
+import { SalesInvoiceInventoryConfirmation } from "@/features/send-message/ui/sales-invoice-inventory-confirmation";
+import { SalesInvoiceRequestDialog } from "@/features/send-message/ui/sales-invoice-request-dialog";
+import { SalesInvoiceSuggestedKickoffCard } from "@/features/send-message/ui/sales-invoice-suggested-kickoff-card";
 import { SupplierInvoiceInventoryConfirmation } from "@/features/send-message/ui/supplier-invoice-inventory-confirmation";
 import { conversationKeys } from "@/entities/conversation/model/query-keys";
 import { documentKeys } from "@/features/upload-document/api/mutations";
+import {
+  parseWorkflowSuggestion,
+  toSalesInvoiceRequestInitialValues,
+  toSalesInvoicePreviewPayload,
+} from "@/features/send-message/model/chat-suggestion-schema";
+import { buildSalesInvoiceConfirmationMessage } from "@/features/send-message/model/sales-invoice-confirmation-message";
+import type {
+  ConfirmSalesInvoiceInventoryPayload,
+  CreateSalesInvoiceInventoryPreviewInput,
+} from "@/features/send-message/model/sales-invoice-workflow-schema";
+import type { InvoiceCreate } from "@/entities/invoice/model/types";
 import { useChatStore } from "@/shared/store/chat-store";
 import { useNotificationStore } from "@/shared/store/notification-store";
+import { ApiError } from "@/shared/api/errors";
 import { Alert } from "@/shared/ui/alert";
 import { Button } from "@/shared/ui/button";
 import { cn } from "@/shared/lib/cn";
@@ -75,11 +97,20 @@ export function ChatWindow({
       unknownDocumentReview: null,
       documentReviewError: null,
       toolTraces: [],
+      activeWorkflow: null,
+      salesInvoiceStatus: "idle",
+      salesInvoiceInventoryReview: null,
+      salesInvoiceDraft: null,
+      salesInvoiceCreated: null,
+      salesInvoiceError: null,
+      salesInvoiceSuggestion: null,
     }),
     [],
   );
   const [state, dispatch] = useReducer(chatReducer, initialState);
   const [movementDraft, setMovementDraft] = useState<RecordStockMovementInput | null>(null);
+  const [isSalesInvoiceRequestOpen, setIsSalesInvoiceRequestOpen] = useState(false);
+  const [suggestedPreviewPending, setSuggestedPreviewPending] = useState(false);
   const isDevelopment = process.env.NODE_ENV === "development";
   const historyLoadedForConversation = useRef<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -88,6 +119,9 @@ export function ChatWindow({
   const isExtractingDocument = state.documentReviewStatus === "loading";
   const isConfirmingInventory = state.documentReviewStatus === "confirming_inventory";
   const isConfirmingExpense = state.documentReviewStatus === "confirming_expense";
+  const isConfirmingSalesInvoiceInventory = state.salesInvoiceStatus === "confirming_sales_invoice_inventory";
+  const isConfirmingSalesInvoice = state.salesInvoiceStatus === "confirming_sales_invoice";
+  const isPreparingSalesInvoiceInventory = state.salesInvoiceStatus === "loading_sales_invoice_inventory";
   const isExpenseConfirmed = state.documentReviewStatus === "confirmed";
   const isAgentThinking =
     state.status === "streaming" && state.streamingContent.length === 0;
@@ -162,6 +196,16 @@ export function ChatWindow({
     return /\b401\b/.test(error.message) || /unauthorized/i.test(error.message);
   }
 
+  function getWorkflowErrorMessage(error: unknown): string {
+    if (error instanceof ApiError) {
+      return error.message;
+    }
+    if (error instanceof Error) {
+      return error.message;
+    }
+    return "Sales invoice workflow request failed.";
+  }
+
   async function resolveActiveToken() {
     const latestSession = await getSession();
     if (latestSession?.error === "RefreshAccessTokenError") {
@@ -192,12 +236,20 @@ export function ChatWindow({
         if (event.event === "route") {
           continue;
         }
+        if (event.event === "workflow_suggestion") {
+          const suggestion = parseWorkflowSuggestion(event.data);
+          if (suggestion?.workflow === "sales_invoice_inventory") {
+            dispatch({ type: "SALES_INVOICE_SUGGESTION_READY", payload: suggestion });
+            setSuggestedPreviewPending(true);
+            setIsSalesInvoiceRequestOpen(true);
+          }
+          continue;
+        }
         if (event.event === "conversation") {
           setConversationId(agentId, companyId, event.data.conversation_id);
           historyLoadedForConversation.current = null;
         }
         if (event.event === "token") {
-          console.log("STREAM_TOKEN", event.data.content);
           dispatch({ type: "STREAM_TOKEN", payload: event.data.content });
         }
         if (event.event === "done") {
@@ -232,6 +284,109 @@ export function ChatWindow({
         void signOut({ callbackUrl: routes.login });
       }
     }
+  }
+
+  async function handleSalesInvoicePreview(payload: CreateSalesInvoiceInventoryPreviewInput["payload"]) {
+    const activeToken = await resolveActiveToken();
+    if (!activeToken || !companyId) {
+      addNotification("Assign this agent to a company before starting the sales invoice workflow.", "error");
+      return;
+    }
+
+    dispatch({ type: "SALES_INVOICE_PREVIEW_LOADING" });
+    try {
+      const response = await createSalesInvoiceInventoryPreview({
+        agentId,
+        token: activeToken,
+        payload,
+      });
+      dispatch({ type: "SALES_INVOICE_INVENTORY_READY", payload: response });
+    } catch (error) {
+      const message = getWorkflowErrorMessage(error);
+      dispatch({ type: "SALES_INVOICE_PREVIEW_FAILED", payload: message });
+      addNotification(message, "error");
+    }
+  }
+
+  async function handleSalesInvoiceInventoryConfirm(values: ConfirmSalesInvoiceInventoryPayload) {
+    const activeToken = await resolveActiveToken();
+    if (!activeToken) {
+      addNotification("You must be logged in to confirm inventory lines.", "error");
+      return;
+    }
+
+    dispatch({ type: "SALES_INVOICE_INVENTORY_CONFIRMING" });
+    try {
+      const response = await confirmSalesInvoiceInventoryReview({
+        agentId,
+        token: activeToken,
+        payload: values,
+      });
+      dispatch({ type: "SALES_INVOICE_READY", payload: response });
+    } catch (error) {
+      const message = getWorkflowErrorMessage(error);
+      dispatch({
+        type: "SALES_INVOICE_INVENTORY_CONFIRMATION_FAILED",
+        payload: message,
+      });
+      addNotification(message, "error");
+    }
+  }
+
+  async function handleSalesInvoiceDraftConfirm(invoiceDraft: InvoiceCreate) {
+    const activeToken = await resolveActiveToken();
+    if (!activeToken) {
+      addNotification("You must be logged in to confirm sales invoices.", "error");
+      return;
+    }
+
+    dispatch({ type: "SALES_INVOICE_CONFIRMING" });
+    try {
+      const response = await confirmSalesInvoiceDraft({
+        agentId,
+        token: activeToken,
+        invoiceDraft,
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: invoiceKeys.all }),
+        queryClient.invalidateQueries({ queryKey: inventoryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: partnerKeys.all }),
+        queryClient.invalidateQueries({ queryKey: conversationKeys.list(conversationListParams) }),
+      ]);
+      dispatch({ type: "SALES_INVOICE_CONFIRMATION_SUCCEEDED", payload: response });
+      dispatch({
+        type: "APPEND_ASSISTANT_MESSAGE",
+        payload: {
+          content: buildSalesInvoiceConfirmationMessage(response),
+          metadata: { kind: "sales_invoice_confirmation" },
+        },
+      });
+      addNotification(`Sales invoice created: ${response.invoice.invoice_number}`, "success");
+    } catch (error) {
+      const message = getWorkflowErrorMessage(error);
+      dispatch({ type: "SALES_INVOICE_CONFIRMATION_FAILED", payload: message });
+      addNotification(message, "error");
+    }
+  }
+
+  async function handleSalesInvoiceSuggestedKickoff() {
+    if (!state.salesInvoiceSuggestion) return;
+    const payload = toSalesInvoicePreviewPayload(state.salesInvoiceSuggestion);
+    if (!payload) {
+      setSuggestedPreviewPending(true);
+      setIsSalesInvoiceRequestOpen(true);
+      return;
+    }
+    await handleSalesInvoicePreview(payload);
+  }
+
+  function handleSalesInvoiceSuggestionStart() {
+    if (state.salesInvoiceSuggestion) {
+      void handleSalesInvoiceSuggestedKickoff();
+      return;
+    }
+    setSuggestedPreviewPending(false);
+    setIsSalesInvoiceRequestOpen(true);
   }
 
   function buildMovementRecordedMessage(values: RecordStockMovementInput): string {
@@ -480,6 +635,15 @@ export function ChatWindow({
         </details>
       ) : null}
 
+      {state.salesInvoiceSuggestion && state.salesInvoiceStatus === "idle" ? (
+        <SalesInvoiceSuggestedKickoffCard
+          suggestion={state.salesInvoiceSuggestion}
+          disabled={state.status === "streaming"}
+          onDismiss={() => dispatch({ type: "SALES_INVOICE_SUGGESTION_DISMISSED" })}
+          onStart={handleSalesInvoiceSuggestionStart}
+        />
+      ) : null}
+
       <div className={cn("flex-1 overflow-y-auto p-4", state.status === "streaming" ? "opacity-100" : "")}>
         <MessageList
           messages={state.messages}
@@ -558,6 +722,27 @@ export function ChatWindow({
             onSuccess={handleMovementDraftSuccess}
           />
         ) : null}
+        {(state.salesInvoiceStatus === "sales_invoice_inventory_ready" ||
+          state.salesInvoiceStatus === "confirming_sales_invoice_inventory") &&
+        state.salesInvoiceInventoryReview ? (
+          <SalesInvoiceInventoryConfirmation
+            review={state.salesInvoiceInventoryReview}
+            confirming={isConfirmingSalesInvoiceInventory}
+            disabled={state.status === "streaming"}
+            onCancel={() => dispatch({ type: "SALES_INVOICE_CLEAR" })}
+            onConfirm={handleSalesInvoiceInventoryConfirm}
+          />
+        ) : null}
+        {state.salesInvoiceDraft ? (
+          <SalesInvoiceDraftConfirmation
+            review={state.salesInvoiceDraft}
+            confirming={isConfirmingSalesInvoice}
+            confirmed={state.salesInvoiceStatus === "sales_invoice_confirmed"}
+            disabled={state.status === "streaming"}
+            onCancel={() => dispatch({ type: "SALES_INVOICE_CLEAR" })}
+            onConfirm={handleSalesInvoiceDraftConfirm}
+          />
+        ) : null}
         <div ref={bottomRef} />
       </div>
 
@@ -566,14 +751,52 @@ export function ChatWindow({
           <Alert variant="destructive">{state.documentReviewError}</Alert>
         </div>
       ) : null}
+      {state.salesInvoiceStatus === "error" && state.salesInvoiceError ? (
+        <div className="px-4 pt-3">
+          <Alert variant="destructive">{state.salesInvoiceError}</Alert>
+        </div>
+      ) : null}
 
       <MessageInput
-        disabled={state.status === "streaming" || isConfirmingInventory || isConfirmingExpense}
+        disabled={
+          state.status === "streaming" ||
+          isConfirmingInventory ||
+          isConfirmingExpense ||
+          isPreparingSalesInvoiceInventory ||
+          isConfirmingSalesInvoiceInventory ||
+          isConfirmingSalesInvoice
+        }
         focusRequestKey={latestMessageScrollKey}
         receiptUploadDisabled={!companyId || state.status === "streaming" || hasActiveDocumentReview}
         receiptUploadLoading={isExtractingDocument}
+        onSalesInvoiceRequest={() => setIsSalesInvoiceRequestOpen(true)}
+        salesInvoiceRequestDisabled={!companyId || state.status === "streaming" || hasActiveDocumentReview}
         onReceiptSelected={handleDocumentSelected}
         onSend={sendMessage}
+      />
+      <SalesInvoiceRequestDialog
+        open={isSalesInvoiceRequestOpen}
+        disabled={
+          state.status === "streaming" ||
+          isPreparingSalesInvoiceInventory ||
+          isConfirmingSalesInvoiceInventory ||
+          isConfirmingSalesInvoice
+        }
+        onOpenChange={(nextOpen) => {
+          setIsSalesInvoiceRequestOpen(nextOpen);
+          if (!nextOpen) {
+            setSuggestedPreviewPending(false);
+          }
+        }}
+        initialPayload={
+          suggestedPreviewPending && state.salesInvoiceSuggestion
+            ? toSalesInvoiceRequestInitialValues(state.salesInvoiceSuggestion)
+            : null
+        }
+        onSubmit={async (payload) => {
+          setSuggestedPreviewPending(false);
+          await handleSalesInvoicePreview(payload);
+        }}
       />
     </div>
   );

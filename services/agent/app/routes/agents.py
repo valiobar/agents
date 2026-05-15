@@ -8,6 +8,7 @@ from app.dependencies import (
     get_chat_service,
     get_document_intake_service,
     get_receipt_service,
+    get_sales_invoice_workflow_service,
     get_user_id,
 )
 from app.models.document_intake import (
@@ -23,10 +24,19 @@ from app.models.financial.receipt import (
     ExpenseDraftRequestSourceDocumentType,
     ExpenseDraftResponse,
 )
+from app.models.sales_invoice_workflow import (
+    ConfirmSalesInvoiceInventoryRequest,
+    ConfirmSalesInvoiceRequest,
+    CreateSalesInvoiceInventoryPreviewRequest,
+    SalesInvoiceCreatedResponse,
+    SalesInvoiceInventoryReviewResponse,
+    SalesInvoiceReviewResponse,
+)
 from app.services.agent_service import AgentService
 from app.services.chat_service import ChatService
 from app.services.document_intake_service import DocumentIntakeService
 from app.services.receipt_service import ReceiptService
+from app.services.sales_invoice_workflow_service import SalesInvoiceWorkflowService
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -133,6 +143,48 @@ async def confirm_supplier_invoice_inventory_import(
         agent_id=agent_id,
         payload=payload,
     )
+
+
+@router.post(
+    "/{agent_id}/invoice-workflows/sales-inventory/preview",
+    response_model=SalesInvoiceInventoryReviewResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_sales_invoice_inventory_preview(
+    agent_id: str,
+    payload: CreateSalesInvoiceInventoryPreviewRequest,
+    user_id: Annotated[str, Depends(get_user_id)],
+    service: Annotated[SalesInvoiceWorkflowService, Depends(get_sales_invoice_workflow_service)],
+) -> SalesInvoiceInventoryReviewResponse:
+    return await service.create_preview(user_id=user_id, agent_id=agent_id, payload=payload)
+
+
+@router.post(
+    "/{agent_id}/invoice-workflows/sales-inventory/inventory/confirm",
+    response_model=SalesInvoiceReviewResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def confirm_sales_invoice_inventory(
+    agent_id: str,
+    payload: ConfirmSalesInvoiceInventoryRequest,
+    user_id: Annotated[str, Depends(get_user_id)],
+    service: Annotated[SalesInvoiceWorkflowService, Depends(get_sales_invoice_workflow_service)],
+) -> SalesInvoiceReviewResponse:
+    return await service.confirm_inventory(user_id=user_id, agent_id=agent_id, payload=payload)
+
+
+@router.post(
+    "/{agent_id}/invoice-workflows/sales-inventory/invoice/confirm",
+    response_model=SalesInvoiceCreatedResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def confirm_sales_invoice(
+    agent_id: str,
+    payload: ConfirmSalesInvoiceRequest,
+    user_id: Annotated[str, Depends(get_user_id)],
+    service: Annotated[SalesInvoiceWorkflowService, Depends(get_sales_invoice_workflow_service)],
+) -> SalesInvoiceCreatedResponse:
+    return await service.confirm_invoice(user_id=user_id, agent_id=agent_id, payload=payload)
 
 
 @router.post(

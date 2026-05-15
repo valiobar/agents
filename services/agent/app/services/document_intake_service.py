@@ -18,6 +18,7 @@ from app.services.document_workflows import (
     SupplierInvoiceDocumentWorkflow,
     UnknownDocumentWorkflow,
 )
+from app.services.workflows import require_company_scoped_agent
 
 
 def create_document_workflow_registry() -> DocumentWorkflowRegistry:
@@ -27,33 +28,6 @@ def create_document_workflow_registry() -> DocumentWorkflowRegistry:
         "supplier_invoice": SupplierInvoiceDocumentWorkflow(),
     }
     return DocumentWorkflowRegistry(workflows=workflows, fallback=fallback)
-
-
-async def require_company_scoped_agent(
-    *,
-    user_id: str,
-    agent_id: str,
-    agent_repo: AgentRepository,
-    business_client: BusinessClient,
-    workflow_name: str,
-) -> str:
-    agent = await agent_repo.get_by_id(user_id, agent_id)
-    if agent is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
-    if not agent.company_id:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"{workflow_name} requires a company-scoped agent",
-        )
-    try:
-        exists = await business_client.company_exists(user_id, agent.company_id)
-    except BusinessClientError as exc:
-        if exc.status_code == status.HTTP_404_NOT_FOUND:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found") from exc
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=exc.message) from exc
-    if not exists:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Company not found")
-    return agent.company_id
 
 
 class DocumentIntakeService:

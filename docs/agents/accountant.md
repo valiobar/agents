@@ -13,6 +13,7 @@ The agent delegates shared execution, streaming, conversation history conversion
 - Query expenses by category, dates, counterparty, amount, or deductibility.
 - Produce financial summaries with source-currency totals and EUR-denominated top-level totals for cross-currency comparisons and EUR threshold checks.
 - Draft and create invoices after partner resolution and explicit user confirmation.
+- Guide inventory-backed sales invoice requests toward the deterministic chat workflow when stock item/location review is required.
 - Record expenses only after explicit user confirmation.
 - Resolve companies when the agent is not bound to a single company.
 - Search, resolve, create, and import partners for invoice workflows.
@@ -29,6 +30,7 @@ The agent delegates shared execution, streaming, conversation history conversion
 | Expense queries | Supported | Uses Business Service expense listing APIs. |
 | Financial summaries | Supported | Includes raw totals by currency and EUR-denominated top-level totals plus `exchange_rates_to_eur`. |
 | Invoice creation | Supported with confirmation | First call returns a draft unless `confirmed=true`. |
+| Inventory-backed sales invoice creation | Supported through workflow handoff | The deterministic workflow resolves inventory and creates the draft through Agent workflow endpoints; the Accountant tool should not guess stock links. |
 | Expense recording | Supported with confirmation | Tool refuses to persist until `confirmed=true`. |
 | Partner management | Supported | Search, resolve, get, and create local partners. |
 | CompanyBook partner import | Supported | Searches external registry, maps details to a local partner, handles missing fields. |
@@ -74,6 +76,7 @@ The system prompt is generated on every run by `AccountantAgent.get_system_promp
 - Use `calculator` for arithmetic and never compare threshold numbers without checking currency.
 - Use `date_helper` for current or relative dates; never guess the current date.
 - Before invoice creation, call `create_invoice` with `confirmed=false`, present the draft, and ask for explicit user confirmation.
+- For stock-backed customer invoices, do not fabricate `inventory_item_id`, `inventory_location_id`, or stock availability. Ask the user to start the inventory-backed sales invoice workflow or rely on the Router `workflow_suggestion` CTA so inventory is reviewed before invoice creation.
 - Before expense recording, summarize the record and ask for explicit user confirmation.
 - Search or resolve local partners before creating invoices.
 - Use CompanyBook.BG only after local partner lookup, or when the user asks to search the Bulgarian registry.
@@ -178,6 +181,7 @@ The runtime must not import repositories or database clients for downstream doma
 - Assigned agents must not switch companies. Finance and partner tools reject a different requested `company_id`.
 - Unassigned agents must resolve a company before company-scoped operations.
 - Invoice creation is a two-step flow: first draft with `confirmed=false`, then persist only after clear user confirmation with `confirmed=true`.
+- Stock-backed invoice creation is a structured workflow, not a plain accountant tool shortcut. Inventory item/location selection must go through the sales invoice inventory review UI before Business receives the final invoice draft.
 - Expense recording requires explicit confirmation before persistence.
 - Partner lookup should prefer local partners before external registry search.
 - CompanyBook imports must ask the user to choose when multiple registry matches are possible.
@@ -208,6 +212,7 @@ Manual verification scenarios:
 - Ask for an invoice summary and verify source currency is preserved.
 - Ask for an EUR threshold check from non-EUR records and verify the assistant mentions conversion.
 - Create an invoice and confirm the first tool response is a draft, with persistence only after explicit confirmation.
+- Ask for an invoice for sold stock and verify the assistant does not invent stock links; Router/chat should offer the inventory-backed sales invoice workflow when available.
 - Record an expense and confirm persistence is blocked until confirmation.
 - Use an unassigned agent with multiple companies and verify company resolution happens before finance tools.
 - Use an assigned agent and verify attempts to pass another `company_id` are rejected.

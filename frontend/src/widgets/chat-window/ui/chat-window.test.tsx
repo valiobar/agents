@@ -11,6 +11,11 @@ import type {
 import type { ConfirmExtractedExpenseResponse } from "@/features/send-message/model/receipt-expense-schema";
 import { ApiError } from "@/shared/api/errors";
 import { renderWithProviders } from "@/test/test-utils";
+import {
+  makeSalesInvoiceCreated,
+  makeSalesInvoiceInventoryReview,
+  makeSalesInvoiceReview,
+} from "@/test/sales-invoice-fixtures";
 
 import { ChatWindow } from "./chat-window";
 
@@ -19,6 +24,9 @@ const {
   mockUpdateInventoryImportPreviewLines,
   mockConfirmInventoryImportForExpense,
   mockConfirmExtractedExpense,
+  mockCreateSalesInvoiceInventoryPreview,
+  mockConfirmSalesInvoiceInventoryReview,
+  mockConfirmSalesInvoiceDraft,
   mockAddNotification,
   mockConversationsQueryData,
   mockConversationQuery,
@@ -33,6 +41,9 @@ const {
   mockUpdateInventoryImportPreviewLines: vi.fn(),
   mockConfirmInventoryImportForExpense: vi.fn(),
   mockConfirmExtractedExpense: vi.fn(),
+  mockCreateSalesInvoiceInventoryPreview: vi.fn(),
+  mockConfirmSalesInvoiceInventoryReview: vi.fn(),
+  mockConfirmSalesInvoiceDraft: vi.fn(),
   mockAddNotification: vi.fn(),
   mockConversationsQueryData: [] as Conversation[],
   mockConversationQuery: { data: null as Conversation | null, isError: false },
@@ -83,6 +94,12 @@ vi.mock("@/features/send-message/api/receipt-expense", () => ({
   updateInventoryImportPreviewLines: (input: unknown) => mockUpdateInventoryImportPreviewLines(input),
   confirmInventoryImportForExpense: (input: unknown) => mockConfirmInventoryImportForExpense(input),
   confirmExtractedExpense: (input: unknown) => mockConfirmExtractedExpense(input),
+}));
+
+vi.mock("@/features/send-message/api/sales-invoice-workflow", () => ({
+  createSalesInvoiceInventoryPreview: (input: unknown) => mockCreateSalesInvoiceInventoryPreview(input),
+  confirmSalesInvoiceInventoryReview: (input: unknown) => mockConfirmSalesInvoiceInventoryReview(input),
+  confirmSalesInvoiceDraft: (input: unknown) => mockConfirmSalesInvoiceDraft(input),
 }));
 
 vi.mock("@/entities/conversation/ui/message-list", () => ({
@@ -884,6 +901,120 @@ describe("ChatWindow", () => {
     expect(mockUpdateInventoryImportPreviewLines).toHaveBeenCalledTimes(1);
     expect(mockConfirmInventoryImportForExpense).toHaveBeenCalledTimes(1);
     expect(screen.getByText(/review inventory import/i)).toBeInTheDocument();
+  });
+
+  it("runs the sales invoice workflow from suggestion through final confirmation and invalidates related queries", async () => {
+    const user = userEvent.setup();
+    const inventoryReview = makeSalesInvoiceInventoryReview();
+    const invoiceReview = makeSalesInvoiceReview();
+    const createdInvoice = makeSalesInvoiceCreated();
+
+    mockStreamAgentMessage.mockImplementationOnce(async function* () {
+      yield {
+        event: "workflow_suggestion",
+        data: {
+          workflow: "sales_invoice_inventory",
+          confidence: 0.94,
+          reason: "The user requested a stock-backed customer invoice.",
+          prefill: {
+            partner_query: "Acme",
+            currency: "EUR",
+            lines: [
+              {
+                description: "Widget A",
+                query: "SKU-001",
+                quantity: "2",
+                unit_label: "pcs",
+                unit_price: "10.00",
+                vat_rate: "0.20",
+                category: "hardware",
+              },
+            ],
+          },
+        },
+      };
+      yield { event: "done", data: { conversation_id: "conversation-1" } };
+    });
+    mockCreateSalesInvoiceInventoryPreview.mockResolvedValueOnce(inventoryReview);
+    mockConfirmSalesInvoiceInventoryReview.mockResolvedValueOnce(invoiceReview);
+    mockConfirmSalesInvoiceDraft.mockResolvedValueOnce(createdInvoice);
+
+    const { queryClient } = renderWithProviders(<ChatWindow agentId="agent-1" companyId="company-1" />);
+    const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
+
+    await user.type(screen.getByPlaceholderText(/message your agent/i), "Create invoice for Acme{Enter}");
+    const requestDialog = await screen.findByRole("dialog");
+    expect(within(requestDialog).getByLabelText(/customer/i)).toHaveValue("Acme");
+    expect(within(requestDialog).getByLabelText(/description/i)).toHaveValue("Widget A");
+    expect(within(requestDialog).getByLabelText(/inventory query/i)).toHaveValue("SKU-001");
+    expect(within(requestDialog).getByLabelText(/quantity/i)).toHaveValue("2");
+    await user.click(within(requestDialog).getByRole("button", { name: /review inventory-backed invoice/i }));
+
+    await waitFor(() => {
+      expect(mockCreateSalesInvoiceInventoryPreview).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "agent-1",
+          token: "token-1",
+          payload: expect.objectContaining({
+            partner_query: "Acme",
+            lines: [expect.objectContaining({ query: "SKU-001" })],
+          }),
+        }),
+      );
+    });
+
+    expect(await screen.findByText(/review sales invoice inventory lines/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /continue to invoice draft/i }));
+
+    await waitFor(() => {
+      expect(mockConfirmSalesInvoiceInventoryReview).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "agent-1",
+          token: "token-1",
+          payload: expect.objectContaining({
+            selected_partner_id: "partner-1",
+            lines: [
+              expect.objectContaining({
+                inventory_item_id: "item-1",
+                inventory_location_id: "loc-1",
+              }),
+            ],
+          }),
+        }),
+      );
+    });
+
+    expect(await screen.findByText(/review sales invoice draft/i)).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /create draft invoice/i }));
+
+    await waitFor(() => {
+      expect(mockConfirmSalesInvoiceDraft).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentId: "agent-1",
+          token: "token-1",
+          invoiceDraft: expect.objectContaining({
+            company_id: "company-1",
+            items: [expect.objectContaining({ inventory_item_id: "item-1" })],
+          }),
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["invoices"] });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["inventory"] });
+      expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ["partners"] });
+      expect(invalidateSpy).toHaveBeenCalledWith({
+        queryKey: [
+          "conversations",
+          "list",
+          { agent_id: "agent-1", company_id: "company-1", limit: 20, offset: 0 },
+        ],
+      });
+    });
+    expect((await screen.findAllByText(/sales invoice created/i)).length).toBeGreaterThan(0);
+    expect(await screen.findByText(/sales invoice created: inv-2026-001/i)).toBeInTheDocument();
+    expect(mockAddNotification).toHaveBeenCalledWith("Sales invoice created: INV-2026-001", "success");
   });
 
   it("redirects to login when chat stream returns unauthorized", async () => {

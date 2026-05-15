@@ -14,6 +14,7 @@ from app.config import settings
 from app.models.shared.agent import AgentInDB
 from app.models.shared.conversation import MessageSchema
 from app.runtime.hooks import AgentRunChunk, AgentRunEvent, AgentRunInput, AgentRunResult
+from app.runtime.workflow_suggestion import WorkflowSuggestion
 from app.runtime.loop_logging import (
     AgentLoopLogger,
     LLMTraceState,
@@ -93,6 +94,10 @@ class BaseAgent(ABC):
         events = self._ui_events
         self._ui_events = []
         return events
+
+    @property
+    def workflow_suggestion(self) -> WorkflowSuggestion | None:
+        return None
 
     async def _apply_prepare_run_input(self, run_input: AgentRunInput) -> AgentRunInput:
         updated = await self.prepare_run_input(run_input)

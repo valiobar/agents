@@ -11,15 +11,19 @@ export function MessageInput({
   focusRequestKey,
   receiptUploadDisabled,
   receiptUploadLoading,
+  salesInvoiceRequestDisabled,
   onSend,
   onReceiptSelected,
+  onSalesInvoiceRequest,
 }: Readonly<{
   disabled?: boolean;
   focusRequestKey?: string;
   receiptUploadDisabled?: boolean;
   receiptUploadLoading?: boolean;
+  salesInvoiceRequestDisabled?: boolean;
   onSend: (message: string) => void | Promise<void>;
   onReceiptSelected?: (file: File) => void | Promise<void>;
+  onSalesInvoiceRequest?: () => void | Promise<void>;
 }>) {
   const [value, setValue] = useState("");
   const trimmed = useMemo(() => value.trim(), [value]);
@@ -76,6 +80,14 @@ export function MessageInput({
         >
           {receiptUploadLoading ? <Spinner className="mr-2" /> : null}
           {uploadLabel}
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          disabled={disabled || salesInvoiceRequestDisabled || !onSalesInvoiceRequest}
+          onClick={() => void onSalesInvoiceRequest?.()}
+        >
+          Create inventory-backed sales invoice
         </Button>
         <Textarea
           ref={textareaRef}

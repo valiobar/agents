@@ -114,6 +114,41 @@ sequenceDiagram
 
 Knowledge extracts and classifies only. Agent routes and enforces approval order. Business remains the only writer for inventory and expense records.
 
+## Sales Invoice Inventory Workflow Flow
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Gateway
+    participant Agent
+    participant Business
+
+    Client->>Gateway: POST /agents/{agent_id}/invoice-workflows/sales-inventory/preview
+    Gateway->>Gateway: validate JWT and inject x-user-id
+    Gateway->>Agent: proxy CreateSalesInvoiceInventoryPreviewRequest
+    Agent->>Business: GET /companies/{company_id}/exists + x-user-id
+    Agent->>Business: POST /partners/resolve or use inline recipient
+    Agent->>Business: POST /inventory/search per requested line
+    Agent->>Business: GET /inventory/levels for candidate items
+    Agent-->>Gateway: sales_invoice_inventory_review
+    Gateway-->>Client: partner candidates, inventory candidates, selected defaults, warnings
+
+    Client->>Gateway: POST /agents/{agent_id}/invoice-workflows/sales-inventory/inventory/confirm
+    Gateway->>Agent: proxy ConfirmSalesInvoiceInventoryRequest
+    Agent->>Business: validate selected item/location stock levels
+    Agent-->>Gateway: sales_invoice_review
+    Gateway-->>Client: editable InvoiceCreate draft
+
+    Client->>Gateway: POST /agents/{agent_id}/invoice-workflows/sales-inventory/invoice/confirm
+    Gateway->>Agent: proxy ConfirmSalesInvoiceRequest with confirmed=true
+    Agent->>Business: POST /invoices
+    Business-->>Agent: InvoiceResponse
+    Agent-->>Gateway: sales_invoice_created
+    Gateway-->>Client: created draft invoice
+```
+
+Agent owns the review sequence and Business owns all persisted company, partner, inventory, and invoice data. The final invoice is created as a Business draft; inventory stock is not reduced by this workflow. Stock issue movements remain Business-owned and are recorded only when the invoice later changes from `draft` to `sent`.
+
 ## Chat Streaming Flow
 
 ```mermaid
@@ -185,6 +220,10 @@ sequenceDiagram
             Agent-->>Gateway: event: route
             Gateway-->>Client: event: route
         end
+        opt router workflow suggestion
+            Agent-->>Gateway: event: workflow_suggestion
+            Gateway-->>Client: event: workflow_suggestion
+        end
         Agent-->>Gateway: event: done
         Gateway-->>Client: event: done
     else provider/runtime/persistence failed
@@ -205,10 +244,11 @@ Runtime hooks are internal to `BaseAgent`. They may transform inputs, tools, nor
 | `start` | `{ "conversation_id": "..." }` | Runtime is ready and streaming begins. |
 | `token` | `{ "content": "..." }` | One streamed assistant chunk. |
 | `route` | `{ "predicted_route": "inventory", "executed_route": "inventory", "reason": "...", "confidence": 0.95, "company_id": "...", "company_scope": "assigned" }` | Optional router metadata emitted after persistence and before `done`. |
+| `workflow_suggestion` | `{ "workflow": "sales_invoice_inventory", "confidence": 0.94, "reason": "...", "prefill": { "partner_query": "Acme", "lines": [] } }` | Optional router kickoff metadata emitted after `route` and before `done`; clients must require user confirmation before calling workflow endpoints. |
 | `error` | `{ "message": "..." }` | Terminal error for lookup, provider setup, runtime execution, or message persistence. |
 | `done` | `{ "conversation_id": "..." }` | Messages were persisted after successful runtime completion. |
 
-The public SSE event names and payloads do not include usage data. Usage is stored internally in `usage_events` for future billing or analytics. Route metadata is diagnostic and non-persisted; clients should ignore it if they do not display routing information.
+The public SSE event names and payloads do not include usage data. Usage is stored internally in `usage_events` for future billing or analytics. Route and workflow suggestion metadata are diagnostic/non-persisted; clients should ignore unknown events and invalid workflow payloads.
 
 ## Runtime Usage Flow
 
@@ -342,3 +382,4 @@ The import tool reuses existing partners by exact UIC before making a new write.
 | Invoices | Gateway or Agent `create_invoice` tool -> Business invoice route/client -> Business invoice service -> Business invoice repo -> MongoDB |
 | Expenses | Gateway or Agent `record_expense` tool -> Business expense route/client -> Business expense service -> Business expense repo -> MongoDB |
 | CompanyBook partner import | Accountant tool -> CompanyBook.BG API -> Business partner route/client -> Business partner service -> Business partner repo -> MongoDB |
+| Inventory-backed sales invoices | Chat workflow UI -> Agent sales invoice workflow routes -> Business partner/inventory/invoice routes -> Business repositories -> MongoDB |

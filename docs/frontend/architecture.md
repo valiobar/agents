@@ -137,9 +137,9 @@ frontend/src/
 │   │   └── register/
 │   │       └── ui/                   # RegisterForm
 │   ├── send-message/
-│   │   ├── ui/                       # MessageInput component
-│   │   ├── model/                    # Send message logic, SSE stream handling
-│   │   └── api/                      # POST /agents/{id}/chat
+│   │   ├── ui/                       # MessageInput, workflow request/review cards, shared review primitives
+│   │   ├── model/                    # Send message logic, SSE parsing schemas, workflow response schemas
+│   │   └── api/                      # POST /agents/{id}/chat and Agent workflow endpoints
 │   ├── create-agent/
 │   │   ├── ui/                       # CreateAgentForm (type picker, LLM config)
 │   │   ├── model/                    # Validation logic
@@ -271,7 +271,7 @@ Each backend service maps to specific frontend slices. When a backend domain cha
 graph LR
     subgraph backend [Backend Services]
         AuthSvc[Auth Service]
-        AgentSvcCompanies[Agent Service -- Companies/Partners]
+        BusinessSvcCompanies[Business Service -- Companies/Partners]
         AgentSvcCRUD[Agent Service -- Agent CRUD]
         AgentSvcChat[Agent Service -- Chat + Document Intake]
         BusinessSvcFin[Business Service -- Invoices/Expenses]
@@ -310,10 +310,10 @@ graph LR
 
     AuthSvc --> EntUser
     AuthSvc --> FeatAuth
-    AgentSvcCompanies --> EntCompany
-    AgentSvcCompanies --> EntPartner
-    AgentSvcCompanies --> FeatCompany
-    AgentSvcCompanies --> FeatPartner
+    BusinessSvcCompanies --> EntCompany
+    BusinessSvcCompanies --> EntPartner
+    BusinessSvcCompanies --> FeatCompany
+    BusinessSvcCompanies --> FeatPartner
     AgentSvcCRUD --> EntAgent
     AgentSvcCRUD --> FeatAgentCrud
     AgentSvcChat --> EntConv
@@ -339,7 +339,7 @@ graph LR
 | Backend Service | Frontend Slices |
 |---|---|
 | Auth Service | `entities/user` + `features/auth/*` |
-| Agent Service (Companies/Partners) | `entities/company` + `entities/partner` + `features/create-company` + `features/update-company` + `features/create-partner` + `features/update-partner` + `widgets/company-table` + `widgets/partner-table` |
+| Business Service (Companies/Partners) | `entities/company` + `entities/partner` + `features/create-company` + `features/update-company` + `features/create-partner` + `features/update-partner` + `widgets/company-table` + `widgets/partner-table` |
 | Agent Service (CRUD) | `entities/agent` + `features/create-agent` + `features/update-agent` |
 | Agent Service (Chat + Document Intake) | `entities/conversation` + `features/send-message` + `widgets/chat-window` |
 | Business Service (Invoices/Expenses) | `entities/invoice` + `features/create-invoice` + `features/download-invoice-pdf` + `widgets/invoice-table` + `entities/expense` + `features/record-expense` + `widgets/expense-table` |
@@ -442,7 +442,7 @@ export function useCreateInvoice() {
 
 ### 2. Streaming State -- useReducer + SSE Hook
 
-Chat token streaming via SSE needs a dedicated state machine scoped to the chat window. Tokens arrive at high frequency and must be appended to a buffer, then committed as a complete message when the stream ends. The same reducer also owns upload-review workflow phases for document intake (`receipt_expense_review`, `supplier_invoice_inventory_review`, `supplier_invoice_expense_review`, `unknown_document_review`). This is not server state (ephemeral, not cached) and not simple UI state (has complex transitions).
+Chat token streaming via SSE needs a dedicated state machine scoped to the chat window. Tokens arrive at high frequency and must be appended to a buffer, then committed as a complete message when the stream ends. The same reducer also owns upload-review workflow phases for document intake (`receipt_expense_review`, `supplier_invoice_inventory_review`, `supplier_invoice_expense_review`, `unknown_document_review`) and inventory-backed sales invoice workflow phases. This is not server state (ephemeral, not cached) and not simple UI state (has complex transitions).
 
 A `useReducer` scoped to `widgets/chat-window/` handles this:
 
@@ -497,7 +497,11 @@ When streaming completes, the finalized message is also written to the TanStack 
 
 Document uploads in the same chat widget call `POST /agents/{agent_id}/document-intake` with `requested_type`. Supplier invoices with extracted item lines require two explicit actions in order: confirm inventory preview through `POST /agents/{agent_id}/document-intake/supplier-invoice/inventory-imports/confirm`, then confirm the expense through `POST /agents/{agent_id}/expenses/confirm`.
 
-The generic SSE parser in `shared/api/sse.ts` uses `fetch()` with `Accept: text/event-stream`, which allows authenticated POST streams to `POST /agents/{id}/chat`. The parser accepts `conversation`, `start`, `token`, `route`, `done`, and `error` events and skips unknown event names. The chat widget dispatches visible actions for token/error/done events and tolerates router `route` metadata without adding a visible message.
+Sales invoice workflows keep a generic `activeWorkflow` slot plus sales-prefixed compatibility fields while the first workflow is being introduced. The active slot records the workflow name, step (`loading_inventory`, `inventory_review`, `invoice_review`, `created`, or `error`), payload, and error. New workflows should extend the generic slot and reducer action shape before adding another full set of workflow-specific fields.
+
+The sales invoice workflow UI is split between `features/send-message` and `widgets/chat-window`: Zod schemas mirror Agent response unions, API helpers call the three `/invoice-workflows/sales-inventory/*` endpoints, reusable `InventoryReviewWarnings`/`WorkflowReviewActions` primitives keep review cards consistent, and `ChatWindow` owns mutation sequencing plus TanStack Query invalidation for invoices, inventory, partners, and conversation history.
+
+The generic SSE parser in `shared/api/sse.ts` uses `fetch()` with `Accept: text/event-stream`, which allows authenticated POST streams to `POST /agents/{id}/chat`. The parser accepts `conversation`, `start`, `token`, `route`, `workflow_suggestion`, `done`, and `error` events and skips unknown event names. The chat widget dispatches visible actions for token/error/done events, tolerates router `route` metadata without adding a visible message, and renders valid `sales_invoice_inventory` suggestions as optional CTA cards. Dismissing a suggestion does not call preview; starting one calls preview only after the user explicitly confirms or completes the request dialog.
 
 ### 3. Form State -- React Hook Form + Zod
 
@@ -885,6 +889,10 @@ sequenceDiagram
         ApiClient-->>SendMsg: yield route metadata
         SendMsg-->>ChatWindow: ignore for visible chat content
     end
+    opt workflow suggestion
+        ApiClient-->>SendMsg: yield workflow_suggestion
+        SendMsg-->>ChatWindow: show optional workflow CTA
+    end
     SendMsg-->>ChatWindow: dispatch STREAM_COMPLETE
     ChatWindow->>ChatWindow: sync to TanStack Query cache
 ```
@@ -1025,7 +1033,9 @@ lucide-react                → icons
 - Added optional inventory linking fields to invoice line items in `features/create-invoice` so invoice lines can reference item/location context.
 - Invoice line-item inventory linking now uses debounced server-side `POST /inventory/search` (minimum 2 characters, stock-aware results) instead of preloading full inventory item lists, which keeps invoice create UX responsive for large catalogs.
 - Router is available in `features/create-agent` as a selectable agent type. Selecting Router from the untouched default lowers temperature to `0.1`, and the company helper text explains that router delegation is limited to compatible company scope.
-- Chat SSE handling accepts optional router `route` metadata and keeps it out of the visible message reducer.
+- Chat SSE handling accepts optional router `route` metadata and `workflow_suggestion` events. Route metadata stays out of visible messages; valid workflow suggestions render optional CTAs.
+- Added inventory-backed sales invoice workflow UI under `features/send-message` and `widgets/chat-window`, including manual kickoff, Router suggestion prefill, inventory review, invoice draft review, final confirmation, and query invalidation after Business creates the draft invoice.
+- Added shared chat workflow review primitives in `features/send-message/ui/inventory-review-primitives.tsx`. They are intentionally small and should be reused by review cards that need warning display and confirm/cancel actions.
 
 ### Phase 3
 

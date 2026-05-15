@@ -2,7 +2,7 @@
 
 ## Current State
 
-The Agent Service owns agent instances, chat runtime orchestration, conversation history, and agent-specific tool sets. The Accountant Agent provides `rag_search`, `calculator`, `date_helper`, Business-backed company/partner tools, Business-backed `query_invoices`, `query_expenses`, `get_financial_summary`, `create_invoice`, `record_expense`, and CompanyBook partner lookup tools. The Inventory Agent provides `search_inventory_stock`, `list_inventory_items`, `get_stock_levels`, `list_low_stock_items`, `get_stock_movements`, `list_inventory_locations`, `create_inventory_item`, `update_inventory_item`, `record_stock_movement`, import preview tools, `rag_search` (inventory-scoped), `calculator`, `date_helper`, and company resolution tools for unassigned agents. The Router Agent classifies each chat turn and delegates to accountant, inventory, or a no-tool general fallback while keeping the same `/agents/{id}/chat` SSE endpoint.
+The Agent Service owns agent instances, chat runtime orchestration, conversation history, agent-specific tool sets, and deterministic review workflows that sit in front of Business-owned writes. The Accountant Agent provides `rag_search`, `calculator`, `date_helper`, Business-backed company/partner tools, Business-backed `query_invoices`, `query_expenses`, `get_financial_summary`, `create_invoice`, `record_expense`, and CompanyBook partner lookup tools. The Inventory Agent provides `search_inventory_stock`, `list_inventory_items`, `get_stock_levels`, `list_low_stock_items`, `get_stock_movements`, `list_inventory_locations`, `create_inventory_item`, `update_inventory_item`, `record_stock_movement`, import preview tools, `rag_search` (inventory-scoped), `calculator`, `date_helper`, and company resolution tools for unassigned agents. The Router Agent classifies each chat turn and delegates to accountant, inventory, or a no-tool general fallback while keeping the same `/agents/{id}/chat` SSE endpoint.
 
 ## Implemented Responsibilities
 
@@ -23,6 +23,7 @@ The Agent Service owns agent instances, chat runtime orchestration, conversation
 - Business HTTP access for company validation, partner lookup/write, invoice and expense query/write, inventory workflows, and financial summary aggregation.
 - Structured financial query and write tools over Business Service contracts.
 - CompanyBook.BG partner lookup tools that search Bulgarian companies, import a selected UIC into the scoped partner workflow through Business, and leave invoice creation on the existing `create_invoice` tool path.
+- Agent-owned sales invoice inventory workflow endpoints that resolve partner/inventory candidates, build an editable invoice draft, and persist the final draft through Business only after explicit confirmation.
 
 ## Layers
 
@@ -59,6 +60,10 @@ services/
   agent_service.py
   chat_service.py
   document_intake_service.py
+  sales_invoice_workflow_graph.py
+  sales_invoice_workflow_service.py
+  workflows/
+    base.py
   document_workflows/
     base.py
     receipt.py
@@ -71,6 +76,7 @@ repositories/
   conversation_repo.py
   usage_repo.py
 models/
+  sales_invoice_workflow.py
   document_intake.py
   agent.py
   chat.py
@@ -116,6 +122,7 @@ tools/
 - **Factory pattern:** `LLMProviderFactory` creates provider wrappers for OpenAI, Anthropic, DeepSeek, and Ollama.
 - **Client adapter pattern:** `BusinessClient` wraps Business Service HTTP calls and translates HTTP failures into tool/service-safe errors.
 - **Thin tools:** LangChain tools adapt stable contracts. `rag_search` calls Knowledge Base over HTTP; `calculator` and `date_helper` run locally; financial, CompanyBook, and inventory tools call Business through `BusinessClient`, never Business repositories directly.
+- **Workflow shell:** Company-bound workflows reuse `require_company_scoped_agent()` and `map_business_client_error()` from `services/workflows/base.py` so Agent-owned review endpoints enforce the same scope and downstream error behavior.
 
 ## Runtime Contract
 
@@ -131,7 +138,7 @@ When the Agent Service runs with `AGENT_ENV=development`, `BaseAgent.run()` also
 
 After a successful runtime run, `ChatService` drains `runtime.consume_usage_events()`. It persists filtered provider-reported token facts to `usage_events` only after conversation messages are saved. Usage persistence failures are logged but do not change an otherwise successful chat into an SSE `error`. The runtime and repository store raw token facts only; they do not calculate billing cost, enforce quotas, or apply model prices.
 
-If the runtime exposes `route_metadata`, `ChatService` emits an optional `route` SSE event after message and usage persistence and before `done`. Route metadata is not written into persisted conversation messages.
+If the runtime exposes `route_metadata`, `ChatService` emits an optional `route` SSE event after message and usage persistence and before `done`. If a router turn also exposes a valid `workflow_suggestion`, `ChatService` emits it after `route` and before `done`. These metadata events are not written into persisted conversation messages and must not start a write workflow without explicit frontend/user action.
 
 Three agent types are currently valid: `"accountant"`, `"inventory"`, and `"router"`. The Accountant Agent can list and resolve companies, query invoices, query expenses, summarize financial records, search/create partners, search CompanyBook.BG for Bulgarian companies, import a selected registry company as a partner, create invoices, and record expenses. The Inventory Agent can search inventory items, check stock levels, list low-stock items, view movement history, create/update items, record stock movements, and review/confirm/cancel supplier invoice import previews. The Router Agent delegates finance and inventory turns to compatible specialist runtimes and handles general turns with a no-tool fallback. Accountant and inventory write tools require explicit user confirmation before `confirmed=true` is sent to the tool.
 
@@ -153,6 +160,7 @@ Agent consumes Business Service in these places:
 - Accountant tools use `BusinessClient` for company listing/resolution, partner lookup/write, invoice and expense query/write, and financial summary calls.
 - Inventory tools use `BusinessClient` for inventory item CRUD, stock level queries, movement recording, location listing, inventory search, and import preview lifecycle.
 - `DocumentIntakeService` uses `BusinessClient` for supplier invoice import preview create/confirm/get during the two-stage approval flow.
+- `SalesInvoiceWorkflowService` uses `BusinessClient` for company scope validation, partner resolution, inventory search/stock validation, and final invoice creation.
 
 `BusinessClient` is backed by a long-lived `httpx.AsyncClient` created during FastAPI lifespan startup. It forwards `x-user-id` on every request and normalizes Business HTTP/transport failures into `BusinessClientError`.
 
@@ -176,6 +184,16 @@ Ownership boundaries are explicit:
 - Knowledge classifies/extracts draft data only.
 - Agent validates extraction output and routes deterministic workflows.
 - Business writes inventory and expenses only when explicit approval endpoints are called.
+
+## Sales Invoice Inventory Workflow
+
+The Agent Service owns a three-step review sequence for inventory-backed customer invoices:
+
+1. `POST /agents/{agent_id}/invoice-workflows/sales-inventory/preview` resolves the scoped company, partner candidates, inventory search candidates, default locations, stock levels, and warnings.
+2. `POST /agents/{agent_id}/invoice-workflows/sales-inventory/inventory/confirm` validates the user-selected partner/item/location lines and returns an editable `InvoiceCreate` draft.
+3. `POST /agents/{agent_id}/invoice-workflows/sales-inventory/invoice/confirm` requires `confirmed=true` and sends the reviewed draft to Business `POST /invoices`.
+
+The workflow is deterministic LangGraph orchestration, not an LLM write path. Router chat can suggest it with `workflow_suggestion`, and the frontend can start it manually, but preview does not run until the user explicitly starts the workflow. Agent does not create stock movements here; Business creates stock issue movements later when the invoice status transitions from `draft` to `sent`.
 
 ## CompanyBook.BG Integration
 

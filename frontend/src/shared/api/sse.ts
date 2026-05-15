@@ -27,11 +27,19 @@ export type ToolTracePayload = {
   output_bytes: number;
 };
 
+export type WorkflowSuggestionEvent = {
+  workflow: string;
+  confidence: number;
+  reason: string;
+  prefill: Record<string, unknown>;
+};
+
 export type ChatStreamEvent =
   | { event: "conversation"; data: { conversation_id: string } }
   | { event: "start"; data: { conversation_id: string } }
   | { event: "token"; data: { content: string } }
   | { event: "route"; data: RouteMetadata }
+  | { event: "workflow_suggestion"; data: WorkflowSuggestionEvent }
   | { event: "inventory_movement_draft"; data: InventoryMovementDraftEvent }
   | { event: "tool_trace"; data: ToolTracePayload }
   | { event: "done"; data: { conversation_id: string } }
@@ -42,6 +50,7 @@ const CHAT_STREAM_EVENT_NAMES = new Set<ChatStreamEvent["event"]>([
   "start",
   "token",
   "route",
+  "workflow_suggestion",
   "inventory_movement_draft",
   "tool_trace",
   "done",
