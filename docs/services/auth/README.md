@@ -9,7 +9,7 @@ Handles user registration, login, Google OAuth, and JWT issuance. Runs on port *
 - **Password hashing:** bcrypt (via passlib)
 - **JWT:** python-jose with HS256
 
-All endpoints are prefixed with `/auth`. In production, clients reach them through the gateway at `http://localhost:8000/auth/*` — the gateway proxies to `http://auth:8001` internally.
+All endpoints are prefixed with `/auth`. Clients reach them through the gateway at `http://localhost:8010/auth/*` (droplet: `http://159.89.26.67:8010/auth/*`). The gateway proxies to `http://auth:8001` internally.
 
 ---
 
@@ -337,13 +337,13 @@ Register a new user and retrieve their profile:
 
 ```bash
 # 1. Register
-curl -X POST http://localhost:8000/auth/register \
+curl -X POST http://localhost:8010/auth/register \
   -H "Content-Type: application/json" \
   -d '{"email": "alice@example.com", "password": "secret1234", "name": "Alice"}'
 # → {"access_token":"eyJ...","refresh_token":"eyJ...","token_type":"bearer"}
 
 # 2. Get profile using the access token
-curl http://localhost:8000/auth/me \
+curl http://localhost:8010/auth/me \
   -H "Authorization: Bearer eyJ..."
 # → {"id":"665f...","email":"alice@example.com","name":"Alice","image":null,"auth_provider":"credentials"}
 ```

@@ -19,17 +19,20 @@ All frontend traffic goes through the **API Gateway**. The gateway validates JWT
 
 ### Services and ports
 
-| Service | Port | Exposed to host | Purpose |
-|---|---:|:---:|---|
-| `frontend` | 3000 | ✅ | Web app (dashboard, chat, forms) |
-| `gateway` | 8000 | ✅ | JWT validation, routing, rate limiting, SSE pass-through |
-| `auth` | 8001 | ❌ | Register/login, Google OAuth callback, JWT issuance |
-| `agent` | 8002 | ❌ | Agent CRUD, LangChain chat runtime, RAG/calculator tools, conversations |
-| `knowledge` | 8003 | ❌ | Document ingestion, ChromaDB management, RAG retrieval |
-| `orchestrator` | 8004 | ❌ | Multi-agent coordination (stub) |
-| `mongodb` | 27017 | ❌ | Users, agents, conversations, document metadata |
-| `redis` | 6379 | ❌ | Gateway rate limiting now; Streams later |
-| `chromadb` | 8005 | ❌ | Vector store for embeddings (RAG) |
+| Service | Container port | Host port | Purpose |
+|---|---:|---:|---|
+| `frontend` | 3000 | 3010 | Web app (dashboard, chat, forms) |
+| `gateway` | 8000 | 8010 | JWT validation, routing, rate limiting, SSE pass-through |
+| `auth` | 8001 | — | Register/login, Google OAuth callback, JWT issuance |
+| `agent` | 8002 | — | Agent CRUD, LangChain chat runtime, RAG/calculator tools, conversations |
+| `business` | 8005 | — | Companies, partners, invoices, expenses |
+| `knowledge` | 8003 | — | Document ingestion, ChromaDB management, RAG retrieval |
+| `orchestrator` | 8004 | — | Multi-agent coordination (stub) |
+| `mongodb` | 27017 | — | Users, agents, conversations, document metadata |
+| `redis` | 6379 | — | Gateway rate limiting now; Streams later |
+| `chromadb` | 8000 | — | Vector store for embeddings (RAG). Not published |
+
+Host ports `3010` and `8010` avoid Hint and vbar-viber-bot on droplet `159.89.26.67`. Production deploy: [`docs/deployment/digitalocean.md`](docs/deployment/digitalocean.md).
 
 ### Repository structure
 
@@ -65,6 +68,8 @@ Preferred full-stack startup:
 ```bash
 cp .env.example .env
 docker compose up --build
+curl http://localhost:8010/health
+curl -I http://localhost:3010/login
 ```
 
 Docker development mode with hot reload:
@@ -101,7 +106,8 @@ Gateway:
 cd gateway
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+# Compose publishes host 8010 → container 8000. Standalone binds 8010 so curls match.
+uvicorn app.main:app --host 0.0.0.0 --port 8010 --reload
 ```
 
 Frontend:
@@ -114,6 +120,8 @@ npm run dev
 
 ### Docs
 
+- **Production deploy (DigitalOcean / GHCR)**: [`docs/deployment/digitalocean.md`](docs/deployment/digitalocean.md)
+- **Local deployment**: [`docs/deployment/README.md`](docs/deployment/README.md)
 - **System architecture**: [`docs/architecture/overview.md`](docs/architecture/overview.md)
 - **System dependency graph**: [`docs/architecture/dependency-graph.md`](docs/architecture/dependency-graph.md)
 - **API reference**: [`docs/api/README.md`](docs/api/README.md)

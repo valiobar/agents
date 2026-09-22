@@ -156,12 +156,12 @@ npm run lint
 Manual smoke test:
 
 ```bash
-curl -X POST http://localhost:8000/agents \
+curl -X POST http://localhost:8010/agents \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"Ops Router","agent_type":"router","company_id":"'"$COMPANY_ID"'","config":{"provider":"openai","temperature":0.1}}'
 
-curl -N -X POST "http://localhost:8000/agents/$ROUTER_AGENT_ID/chat" \
+curl -N -X POST "http://localhost:8010/agents/$ROUTER_AGENT_ID/chat" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Accept: text/event-stream" \
   -H "Content-Type: application/json" \

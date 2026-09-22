@@ -1,5 +1,7 @@
 # Deployment Guide
 
+Local Compose is documented here. Production on the shared DigitalOcean droplet (`159.89.26.67`) is [digitalocean.md](./digitalocean.md): GHCR images, `deploy.sh`, and host ports **8010** (gateway) and **3010** (frontend).
+
 ## Prerequisites
 
 | Tool | Minimum Version | Check |
@@ -54,8 +56,8 @@ Python services run `uvicorn --reload`, and the frontend runs `next dev`. Source
 ### 3. Verify health
 
 ```bash
-curl http://localhost:8000/health   # → {"status":"ok","service":"gateway"}
-curl -I http://localhost:3000/login # → HTTP 200 from the frontend
+curl http://localhost:8010/health   # → {"status":"ok","service":"gateway"}
+curl -I http://localhost:3010/login # → HTTP 200 from the frontend
 ```
 
 Only the frontend and gateway are published to the host. Internal service health can be checked from inside the Docker network, for example:
@@ -78,9 +80,9 @@ PY
 
 ```
                          ┌──────────────────────────────────────────┐
- Host :3000 ────────────►│ Frontend :3000                           │
+ Host :3010 ────────────►│ Frontend :3000                           │
                          │        │                                 │
- Host :8000 ────────────►│        ▼                                 │
+ Host :8010 ────────────►│        ▼                                 │
                          │  ┌─────────┐                             │
                          │  │ Gateway  │──► Auth       (:8001)      │
                          │  │  :8000   │──► Agent      (:8002)      │
@@ -104,8 +106,8 @@ Every container sits on a single Docker bridge network (`agents-network`). Servi
 
 | Service | Internal Port | Host Port | Exposed to clients |
 |---------|:------------:|:---------:|:------------------:|
-| Frontend | 3000 | 3000 | **Yes** |
-| Gateway | 8000 | 8000 | **Yes** |
+| Frontend | 3000 | 3010 | **Yes** |
+| Gateway | 8000 | 8010 | **Yes** |
 | Auth | 8001 | not published | No |
 | Agent | 8002 | not published | No |
 | Knowledge | 8003 | not published | No |
@@ -115,7 +117,7 @@ Every container sits on a single Docker bridge network (`agents-network`). Servi
 | Redis | 6379 | not published | No |
 | ChromaDB | 8000 | not published | No |
 
-Only the frontend and gateway are exposed for the user-facing path. All other services are reachable by Docker DNS names on `agents-network`.
+Only the frontend and gateway are exposed for the user-facing path. All other services are reachable by Docker DNS names on `agents-network`. Host ports `3010` and `8010` leave Hint (`8000`, `3001`, `1337`, `3002`) and vbar-viber-bot (`3000`, `127.0.0.1:8000`, `127.0.0.1:27017`) alone on `159.89.26.67`.
 
 > **ChromaDB port note:** ChromaDB listens on port 8000 inside the container, but it is not published to the host in the default compose file. Containers use `CHROMADB_HOST=chromadb` and `CHROMADB_PORT=8000`.
 
@@ -225,9 +227,11 @@ All application services read from a single `.env` file via `env_file: .env` in 
 | `PRELOAD_TAX_DOCS` | `false` | knowledge | Enables startup load into ChromaDB `global_tax` |
 | `BUSINESS_SERVICE_URL` | `http://business:8005` | gateway, agent, knowledge | Internal Business Service URL for domain routing, Agent tools, and Knowledge company ownership validation |
 | `BUSINESS_TIMEOUT_SECONDS` | `15.0` | agent | Per-request timeout for Agent-to-Business calls |
-| `NEXT_PUBLIC_GATEWAY_URL` | `http://localhost:8000` | frontend browser | Public gateway URL used by client-side fetches and SSE |
-| `GATEWAY_URL` | `http://gateway:8000` | frontend server runtime | Internal gateway URL for NextAuth server-side requests in Docker |
-| `NEXTAUTH_URL` | `http://localhost:3000` | frontend | Public frontend URL used by NextAuth callbacks |
+| `NEXT_PUBLIC_GATEWAY_URL` | `/gateway-api` | frontend browser | Same-origin proxy. Next rewrites it to `GATEWAY_URL` |
+| `GATEWAY_URL` | `http://gateway:8000` | frontend server runtime | Internal gateway URL. Host publish is `8010`, not this value |
+| `NEXTAUTH_URL` | `http://localhost:3010` | frontend | Public frontend URL. Droplet: `http://159.89.26.67:3010`. `npm run dev` uses `http://localhost:3000` |
+| `CORS_ORIGINS` | localhost `:3000` and `:3010`, droplet `:3010` | gateway | Browser origins allowed to call the gateway directly |
+| `IMAGE_TAG` | `latest` | production compose | GHCR tag. CI sets the git SHA on the droplet |
 | `NEXTAUTH_SECRET` | *(must set)* | frontend | Secret used to sign NextAuth JWT/session cookies |
 
 > **Critical:** `JWT_SECRET` must be identical for `auth` and `gateway`. Auth signs tokens with it; the gateway validates tokens with it. A mismatch means every authenticated request returns 401.
@@ -238,7 +242,7 @@ All application services read from a single `.env` file via `env_file: .env` in 
 
 ## Frontend Runtime
 
-The frontend runs on `http://localhost:3000` and all backend traffic goes through the gateway on `http://localhost:8000`.
+Docker Compose publishes the frontend on `http://localhost:3010` (container port 3000). `npm run dev` still listens on `http://localhost:3000`. Backend traffic from the host goes through the gateway on `http://localhost:8010` (container port 8000). On the droplet those URLs are `http://159.89.26.67:3010` and `http://159.89.26.67:8010`.
 
 Run locally:
 
@@ -273,7 +277,7 @@ Common frontend failures:
 
 | Symptom | Likely Cause | Fix |
 |---------|--------------|-----|
-| Browser says CORS preflight failed | Gateway is not running with CORS for `http://localhost:3000` | Rebuild/restart `gateway` |
+| Browser says CORS preflight failed | Gateway `CORS_ORIGINS` does not include the frontend origin (`http://localhost:3000` for `npm run dev`, `http://localhost:3010` for Compose, `http://159.89.26.67:3010` on the droplet) | Set `CORS_ORIGINS` and restart `gateway` |
 | Login redirects back to login | `NEXTAUTH_SECRET`, `NEXTAUTH_URL`, or `GATEWAY_URL` is missing/mismatched | Check `.env` and rebuild `frontend` |
 | Chat emits SSE `error` about provider API key | Agent provider key is missing | Set `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc. |
 | Document upload returns 500 during embedding | `OPENAI_API_KEY` is missing or invalid | Set a valid OpenAI key before uploading |
@@ -303,8 +307,8 @@ OPENAI_API_KEY=sk-...
 Use the gateway for client requests:
 
 ```bash
-curl http://localhost:8000/health
-curl "http://localhost:8000/documents?company_id=$COMPANY_ID" \
+curl http://localhost:8010/health
+curl "http://localhost:8010/documents?company_id=$COMPANY_ID" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -375,11 +379,7 @@ docker compose exec auth python -c "from app.config import settings; print(setti
 
 ### Scale (for testing)
 
-```bash
-docker compose up --scale agent=3    # run 3 agent containers
-```
-
-Not useful in Phase 1 (no load balancer configured), but supported by Compose.
+Services use fixed `container_name` values (`agents-agent`, and so on), so `docker compose up --scale` is not available. One container per service is the supported layout.
 
 ---
 
@@ -389,7 +389,7 @@ Every application service exposes `GET /health`, but only the gateway health end
 
 | URL | Expected Response |
 |-----|-------------------|
-| `http://localhost:8000/health` | `{"status": "ok", "service": "gateway"}` |
+| `http://localhost:8010/health` | `{"status": "ok", "service": "gateway"}` |
 
 Check internal service health from inside the Docker network or by inspecting container logs:
 
@@ -417,7 +417,7 @@ Understanding how a request travels through the stack:
 ```
 Client
   │
-  ▼  POST http://localhost:8000/auth/register
+  ▼  POST http://localhost:8010/auth/register
 ┌─────────┐
 │ Gateway  │  1. JWTAuthMiddleware: path starts with /auth → skip auth
 │  :8000   │  2. RateLimitMiddleware: no user_id yet → skip rate limit
@@ -439,7 +439,7 @@ Authenticated requests add two more steps:
 ```
 Client
   │
-  ▼  GET http://localhost:8000/agents?limit=20&offset=0  (Authorization: Bearer <token>)
+  ▼  GET http://localhost:8010/agents?limit=20&offset=0  (Authorization: Bearer <token>)
 ┌─────────┐
 │ Gateway  │  1. JWTAuthMiddleware: decode token → set request.state.user_id
 │  :8000   │  2. RateLimitMiddleware: INCR rate:<user_id>:<hour> in Redis
@@ -496,12 +496,12 @@ docker compose exec redis redis-cli ping   # should return PONG
 ### Port already in use
 
 ```bash
-# find what's using the port (e.g. 8000)
-lsof -i :8000
+# find what's using the published gateway port
+lsof -i :8010
 
 # either stop that process or change the host port in docker-compose.yml:
 # ports:
-#   - "9000:8000"   # map to 9000 on host instead
+#   - "9010:8000"   # map host 9010 to container 8000
 ```
 
 ### Stale images after dependency changes
@@ -526,14 +526,14 @@ This destroys all data (MongoDB documents, Redis keys, ChromaDB embeddings).
 
 ---
 
-## Production Considerations
+## Production
 
-This setup is designed for **local development**. For production deployment, consider:
+The droplet deploy path is [digitalocean.md](./digitalocean.md). GitHub Actions builds images, pushes `ghcr.io/valiobar/agents-<service>:<sha>`, then SSH-runs `deploy.sh`. The VPS pulls images. It does not run `--build`.
 
-- **Remove dev port mappings.** Only expose `gateway:8000` (and `frontend:3000` when available). Internal services and databases should not be reachable from outside the Docker network.
-- **Use external managed databases.** Replace the containerized MongoDB and Redis with managed services (MongoDB Atlas, AWS ElastiCache, etc.) for reliability, backups, and scaling.
-- **Set strong secrets.** Generate `JWT_SECRET` with `openssl rand -hex 64`. Never use the default placeholder.
-- **Enable TLS.** Put a reverse proxy (Nginx, Traefik, Caddy) in front of the gateway to terminate HTTPS.
-- **Add logging and monitoring.** Integrate structured logging (e.g., JSON logs) and forward to a log aggregation service. Add Prometheus metrics or a health-check monitoring service.
-- **Container orchestration.** For multi-node deployments, migrate from Docker Compose to Kubernetes or Docker Swarm with proper resource limits, replica counts, and rolling updates.
-- **CI/CD pipeline.** Automate image builds, run tests, and deploy on merge to main.
+Published host ports on that path are gateway `8010` and frontend `3010`. MongoDB, Redis, and ChromaDB are not published. Container names are prefixed with `agents-` so they do not collide with Hint or vbar-viber-bot.
+
+Further production hardening that this Compose file does not do by itself:
+
+- **TLS.** Put a reverse proxy (Nginx, Traefik, Caddy) in front of `:8010` and `:3010`. Point `NEXTAUTH_URL` and `CORS_ORIGINS` at the HTTPS origins.
+- **Strong secrets.** `deploy.sh` rejects the example `JWT_SECRET` and `NEXTAUTH_SECRET` placeholders.
+- **Logging and monitoring.** Structured logs and an external health check against `http://159.89.26.67:8010/health`.

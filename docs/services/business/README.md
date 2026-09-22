@@ -86,7 +86,7 @@ Routes do request/response handling only. Services own business rules and orches
 
 ## API Surface
 
-All public calls go through the gateway at `http://localhost:8000`. Direct internal calls require `x-user-id`.
+All public calls go through the gateway at `http://localhost:8010`. Direct internal calls require `x-user-id`.
 
 | Route | Status | Purpose |
 |-------|--------|---------|
@@ -186,7 +186,7 @@ docker compose up --build mongodb business gateway
 Health checks:
 
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8010/health
 docker compose exec business python -m compileall app
 docker compose logs business
 ```
@@ -194,7 +194,7 @@ docker compose logs business
 Create a company, partner, invoice, expense, and summary through the gateway:
 
 ```bash
-curl -X POST http://localhost:8000/companies \
+curl -X POST http://localhost:8010/companies \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -207,7 +207,7 @@ curl -X POST http://localhost:8000/companies \
     "is_default": true
   }'
 
-curl -X POST http://localhost:8000/partners \
+curl -X POST http://localhost:8010/partners \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -221,7 +221,7 @@ curl -X POST http://localhost:8000/partners \
     "accountable_person": "Petar Petrov"
   }'
 
-curl -X POST http://localhost:8000/invoices \
+curl -X POST http://localhost:8010/invoices \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -242,7 +242,7 @@ curl -X POST http://localhost:8000/invoices \
     ]
   }'
 
-curl -X POST http://localhost:8000/expenses \
+curl -X POST http://localhost:8010/expenses \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{

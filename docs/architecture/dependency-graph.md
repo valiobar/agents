@@ -20,8 +20,8 @@ graph TD
     end
 
     subgraph exposed ["Exposed Services"]
-        FE["Frontend<br/><i>Next.js :3000</i>"]
-        GW["API Gateway<br/><i>FastAPI :8000</i>"]
+        FE["Frontend<br/><i>Next.js host :3010 → :3000</i>"]
+        GW["API Gateway<br/><i>FastAPI host :8010 → :8000</i>"]
     end
 
     subgraph app_services ["Application Services (internal network only)"]
@@ -258,8 +258,8 @@ Only two services are reachable from outside the Docker network.
 
 | Service | Host Port | Accessible From | Notes |
 |---------|----------|----------------|-------|
-| **Frontend** | 3000 | Browser | Web application entry point |
-| **Gateway** | 8000 | Browser / Frontend | Single API entry point, JWT required for most routes |
+| **Frontend** | 3010 | Browser | Web application entry point. Container listens on 3000 |
+| **Gateway** | 8010 | Browser / Frontend | Single API entry point, JWT required for most routes. Container listens on 8000 |
 | Auth | not published | Internal only | Reachable as `http://auth:8001` on `agents-network` |
 | Agent | not published | Internal only | Reachable as `http://agent:8002` on `agents-network` |
 | Knowledge | not published | Internal only | Reachable as `http://knowledge:8003` on `agents-network` |
@@ -269,7 +269,7 @@ Only two services are reachable from outside the Docker network.
 | Redis | not published | Internal only | Reachable as `redis:6379` on `agents-network` |
 | ChromaDB | not published | Internal only | Reachable as `chromadb:8000` on `agents-network` |
 
-> The default compose file exposes only ports 3000 and 8000. Publish internal ports temporarily only when debugging a specific service.
+> The default compose file exposes only host ports 3010 (frontend) and 8010 (gateway). MongoDB, Redis, and ChromaDB are not published. The dev override publishes internal app ports for debugging and must not be used on the shared droplet.
 
 ---
 

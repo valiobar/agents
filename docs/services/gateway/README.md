@@ -2,7 +2,7 @@
 
 ## Overview
 
-Thin reverse-proxy with cross-cutting concerns: **JWT validation**, **per-user rate limiting**, and **request routing**. The gateway runs on port **8000** and is the **only backend entry point** for the frontend and external clients — no service should be called directly in production.
+Thin reverse-proxy with cross-cutting concerns: **JWT validation**, **per-user rate limiting**, and **request routing**. The gateway listens on container port **8000** and is published on host port **8010**. It is the **only backend entry point** for the frontend and external clients — no service should be called directly in production.
 
 - **Framework:** FastAPI 0.115 (Starlette middleware layer)
 - **HTTP client:** httpx (async, streaming-capable)
@@ -21,7 +21,7 @@ Client request
   ▼
 ┌─────────────────────────────────────────┐
 │ 1. CORSMiddleware                       │
-│    • Allows http://localhost:3000       │
+│    • Allows CORS_ORIGINS                │
 │    • Answers browser preflight requests │
 ├─────────────────────────────────────────┤
 │ 2. JWTAuthMiddleware                    │
@@ -89,9 +89,7 @@ No changes to the middleware or proxy function are needed — the catch-all rout
 
 ### 1. CORS (`CORSMiddleware`)
 
-The gateway allows the local frontend origin `http://localhost:3000` and supports credentials, all methods, and all request headers. This is required because browser-side frontend calls include `Authorization: Bearer <token>`, which triggers a CORS preflight request.
-
-Production deployments should replace the local origin with the deployed frontend origin.
+The gateway allows the origins in `CORS_ORIGINS` (default `http://localhost:3000` for `npm run dev`, `http://localhost:3010` for Compose, and `http://159.89.26.67:3010` on the droplet). It supports credentials, all methods, and all request headers. This matters when the browser calls the gateway directly. The default frontend uses the same-origin `/gateway-api` rewrite, so most browser calls never leave the frontend origin.
 
 ### 2. JWT Authentication (`middleware/auth.py`)
 
@@ -205,7 +203,7 @@ The httpx client uses a **120-second timeout** (`timeout=120.0`). This is intent
 - **Connection pooling:** Currently, a new `httpx.AsyncClient` is created per request. For higher throughput, create a shared client on startup (via FastAPI lifespan) and reuse it across requests.
 - **Circuit breaker:** If a downstream service is consistently failing, the gateway should stop forwarding requests to it temporarily. Consider `tenacity` or a custom circuit breaker.
 - **Request/response logging:** Add structured logging for proxied requests (method, path, target, status, latency) for observability.
-- **CORS:** No CORS middleware is configured yet. When the frontend is deployed on a different origin, add `CORSMiddleware` with appropriate `allow_origins`.
+- **CORS:** Allowed origins come from `CORS_ORIGINS`. Add a new public frontend origin there instead of editing code.
 
 ---
 
@@ -285,7 +283,7 @@ The health endpoint is exempt from JWT auth and rate limiting (path starts with 
 ### Unauthenticated — Registration
 
 ```
-Client  →  POST http://localhost:8000/auth/register  { email, password, name }
+Client  →  POST http://localhost:8010/auth/register  { email, password, name }
 
   JWTAuthMiddleware:  path starts with /auth → SKIP
   RateLimitMiddleware: no user_id → SKIP
@@ -300,7 +298,7 @@ Client  ←  201 { access_token, refresh_token, token_type }
 `/auth/*` routes are exempt from JWT auth at the gateway and are forwarded directly to the Auth Service.
 
 ```
-Client  →  POST http://localhost:8000/auth/refresh  { refresh_token }
+Client  →  POST http://localhost:8010/auth/refresh  { refresh_token }
 
   JWTAuthMiddleware:  path starts with /auth → SKIP
   RateLimitMiddleware: no user_id → SKIP
@@ -313,7 +311,7 @@ Client  ←  200 { access_token, refresh_token, token_type }
 ### Authenticated — Calling Agent Service
 
 ```
-Client  →  GET http://localhost:8000/agents?limit=20&offset=0
+Client  →  GET http://localhost:8010/agents?limit=20&offset=0
             Authorization: Bearer eyJ...
 
   JWTAuthMiddleware:
@@ -341,7 +339,7 @@ Client  ←  200 [{ "id": "...", "name": "My Accountant", ... }]
 Company, partner, invoice, and expense requests use the same gateway behavior as Agent requests: validate JWT, rate limit by user, inject `x-user-id`, and proxy to the target service. Business-domain prefixes route to the Business Service, while `/agents` and `/conversations` route to the Agent Service.
 
 ```
-Client  →  POST http://localhost:8000/companies
+Client  →  POST http://localhost:8010/companies
             Authorization: Bearer eyJ...
             { "name": "Acme Ltd", "registration_number": "123", ... }
 
@@ -357,7 +355,7 @@ The gateway does not check whether a `company_id` or `partner_id` belongs to the
 ### Rate-Limited Request
 
 ```
-Client  →  GET http://localhost:8000/agents
+Client  →  GET http://localhost:8010/agents
             Authorization: Bearer eyJ...
 
   JWTAuthMiddleware: valid → user_id set
@@ -371,7 +369,7 @@ Client  ←  429 { "detail": "Rate limit exceeded. Try again later." }
 ### SSE Streaming
 
 ```
-Client  →  POST http://localhost:8000/agents/{agent_id}/chat
+Client  →  POST http://localhost:8010/agents/{agent_id}/chat
             Authorization: Bearer eyJ...
             Accept: text/event-stream
             Content-Type: application/json
@@ -400,7 +398,7 @@ Client  ←  200  text/event-stream
 docker compose up --build gateway redis auth mongodb
 ```
 
-The gateway starts on `http://localhost:8000`. It requires Redis (for rate limiting) and Auth (so proxied auth requests work).
+Compose publishes the gateway on `http://localhost:8010` (container port 8000). It requires Redis (for rate limiting) and Auth (so proxied auth requests work).
 
 ### Standalone (development)
 
@@ -410,7 +408,8 @@ pip install -r requirements.txt
 
 # Make sure Redis is running and REDIS_URL is set
 # Make sure JWT_SECRET matches the auth service
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+# Host port 8010 matches Compose. The container command stays --port 8000.
+uvicorn app.main:app --host 0.0.0.0 --port 8010 --reload
 ```
 
 ---
@@ -419,10 +418,10 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 ```bash
 # Health check (no auth needed)
-curl http://localhost:8000/health
+curl http://localhost:8010/health
 
 # Register a user (no auth needed, proxied to auth service)
-curl -X POST http://localhost:8000/auth/register \
+curl -X POST http://localhost:8010/auth/register \
   -H "Content-Type: application/json" \
   -d '{"email": "test@example.com", "password": "secret1234", "name": "Test"}'
 
@@ -430,15 +429,15 @@ curl -X POST http://localhost:8000/auth/register \
 TOKEN="eyJ..."
 
 # Proxy to agent service (auth required)
-curl "http://localhost:8000/agents?limit=20&offset=0" \
+curl "http://localhost:8010/agents?limit=20&offset=0" \
   -H "Authorization: Bearer $TOKEN"
 
 # Check rate limit headers in response
-curl -v "http://localhost:8000/agents?limit=20&offset=0" \
+curl -v "http://localhost:8010/agents?limit=20&offset=0" \
   -H "Authorization: Bearer $TOKEN" 2>&1 | grep -i x-ratelimit
 
 # Hit a non-existent route → 404
-curl http://localhost:8000/unknown/path \
+curl http://localhost:8010/unknown/path \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -450,7 +449,7 @@ These are known gaps and planned improvements for later phases. Document them he
 
 | Area | Current State | Future Improvement |
 |------|--------------|-------------------|
-| **CORS** | Configured for `http://localhost:3000` | Make allowed origins configurable for deployed frontend domains |
+| **CORS** | `CORS_ORIGINS` (localhost `:3000`, `:3010`, droplet `:3010`) | Add HTTPS origins when a reverse proxy is introduced |
 | **Connection pooling** | New `httpx.AsyncClient` per request | Shared client via FastAPI lifespan for better throughput |
 | **Rate limiting** | Fixed 1-hour window | Sliding window (Redis sorted sets) for smoother limiting |
 | **Per-endpoint limits** | Single global limit | Different limits for LLM-heavy vs. lightweight endpoints |

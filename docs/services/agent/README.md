@@ -79,7 +79,7 @@ Routes do request/response handling only. Services own orchestration and agent-s
 
 ## API Surface
 
-All client calls go through the API Gateway at `http://localhost:8000`. Internal direct calls require `x-user-id`.
+All client calls go through the API Gateway at `http://localhost:8010`. Internal direct calls require `x-user-id`.
 
 | Route | Status | Purpose |
 |-------|--------|---------|
@@ -239,14 +239,14 @@ docker compose up --build mongodb redis chromadb auth business gateway knowledge
 Health checks:
 
 ```bash
-curl http://localhost:8000/health
+curl http://localhost:8010/health
 docker compose logs agent
 ```
 
 Create a company and partner through the Business-owned gateway routes, then create an assigned agent:
 
 ```bash
-curl -X POST http://localhost:8000/companies \
+curl -X POST http://localhost:8010/companies \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -259,7 +259,7 @@ curl -X POST http://localhost:8000/companies \
     "is_default": true
   }'
 
-curl -X POST http://localhost:8000/partners \
+curl -X POST http://localhost:8010/partners \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -273,7 +273,7 @@ curl -X POST http://localhost:8000/partners \
     "accountable_person": "Petar Petrov"
   }'
 
-curl -X POST http://localhost:8000/agents \
+curl -X POST http://localhost:8010/agents \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"My Accountant","agent_type":"accountant","company_id":"'"$COMPANY_ID"'","config":{"provider":"openai","temperature":0.2}}'
@@ -282,7 +282,7 @@ curl -X POST http://localhost:8000/agents \
 Create a router agent for the same company:
 
 ```bash
-curl -X POST http://localhost:8000/agents \
+curl -X POST http://localhost:8010/agents \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"Ops Router","agent_type":"router","company_id":"'"$COMPANY_ID"'","config":{"provider":"openai","temperature":0.1}}'
@@ -293,7 +293,7 @@ Router delegation currently uses linked delegate documents when they exist (`par
 Stream chat:
 
 ```bash
-curl -N -X POST "http://localhost:8000/agents/$AGENT_ID/chat" \
+curl -N -X POST "http://localhost:8010/agents/$AGENT_ID/chat" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Accept: text/event-stream" \
   -H "Content-Type: application/json" \
@@ -307,14 +307,14 @@ For router chats, setup also resolves compatible accountant and inventory child 
 Load conversation history:
 
 ```bash
-curl "http://localhost:8000/conversations/$CONVERSATION_ID" \
+curl "http://localhost:8010/conversations/$CONVERSATION_ID" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
 Create an invoice through the Business-owned gateway route:
 
 ```bash
-curl -X POST http://localhost:8000/invoices \
+curl -X POST http://localhost:8010/invoices \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -342,7 +342,7 @@ curl -X POST http://localhost:8000/invoices \
 Record an expense through the Business-owned gateway route:
 
 ```bash
-curl -X POST http://localhost:8000/expenses \
+curl -X POST http://localhost:8010/expenses \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{

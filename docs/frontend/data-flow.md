@@ -2,7 +2,7 @@
 
 ## Current State
 
-The frontend is implemented and served on `http://localhost:3000`. Browser requests call the API Gateway on `http://localhost:8000`; the gateway allows the local frontend origin with CORS and proxies authenticated requests to internal services. Next.js server runtime code uses `GATEWAY_URL` when available, while browser code uses `NEXT_PUBLIC_GATEWAY_URL`.
+Docker Compose publishes the frontend on `http://localhost:3010` (container port 3000). `npm run dev` listens on `http://localhost:3000`. Browser requests use `NEXT_PUBLIC_GATEWAY_URL` (`/gateway-api` by default), which Next.js rewrites to `GATEWAY_URL`. From the host, the gateway is `http://localhost:8010` (container port 8000). On the droplet those URLs are `http://159.89.26.67:3010` and `http://159.89.26.67:8010`. The gateway allows the frontend origins in `CORS_ORIGINS` and proxies authenticated requests to internal services.
 
 ## Authentication Flow
 

@@ -76,7 +76,7 @@ Explicitly planned for Phase 4:
 Example:
 
 ```bash
-curl -X POST http://localhost:8000/agents \
+curl -X POST http://localhost:8010/agents \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -125,7 +125,7 @@ Expected response shape:
 Example:
 
 ```bash
-curl -N -X POST "http://localhost:8000/agents/$AGENT_ID/chat" \
+curl -N -X POST "http://localhost:8010/agents/$AGENT_ID/chat" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Accept: text/event-stream" \
   -H "Content-Type: application/json" \
@@ -155,7 +155,7 @@ The service persists only successful user/assistant turns. The conversation is c
 Example history lookup:
 
 ```bash
-curl "http://localhost:8000/conversations/$CONVERSATION_ID" \
+curl "http://localhost:8010/conversations/$CONVERSATION_ID" \
   -H "Authorization: Bearer $TOKEN"
 ```
 

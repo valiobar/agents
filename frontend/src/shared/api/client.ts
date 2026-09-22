@@ -6,6 +6,7 @@ class ApiClient {
   constructor(private readonly baseUrl: string = env.publicGatewayUrl) {}
 
   async request<T>(path: string, options: ApiRequestOptions = {}): Promise<T> {
+    // Next listens on container/`npm run dev` port 3000. Host publish is 3010.
     const origin =
       globalThis.window === undefined ? "http://localhost:3000" : globalThis.window.location.origin;
     const baseUrl = this.baseUrl.startsWith("http") ? this.baseUrl : `${origin}${this.baseUrl}`;

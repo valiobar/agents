@@ -7,7 +7,7 @@ const nextConfig = {
     return [
       {
         source: "/gateway-api/:path*",
-        destination: `${process.env.GATEWAY_URL ?? "http://localhost:8000"}/:path*`,
+        destination: `${process.env.GATEWAY_URL ?? "http://localhost:8010"}/:path*`,
       },
     ];
   },
