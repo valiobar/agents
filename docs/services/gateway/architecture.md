@@ -63,11 +63,11 @@ The Business Service split is active. Gateway keeps public URLs stable while rou
 
 Smoke checks for the split:
 
-- `GET http://localhost:8000/health` verifies the gateway remains public and healthy.
+- `GET http://localhost:8010/health` verifies the gateway remains public and healthy.
 - `GET http://business:8005/health` verifies the Business container inside the Docker network.
-- `GET http://localhost:8000/companies` verifies the stable gateway contract while routing to Business.
-- `GET http://localhost:8000/inventory/items?company_id=<company_id>&limit=1&offset=0` verifies inventory item reads route through the same Business upstream.
-- `GET http://localhost:8000/inventory/import-previews?company_id=<company_id>&limit=1&offset=0` verifies inventory import preview reads route through Business.
+- `GET http://localhost:8010/companies` verifies the stable gateway contract while routing to Business.
+- `GET http://localhost:8010/inventory/items?company_id=<company_id>&limit=1&offset=0` verifies inventory item reads route through the same Business upstream.
+- `GET http://localhost:8010/inventory/import-previews?company_id=<company_id>&limit=1&offset=0` verifies inventory import preview reads route through Business.
 - `POST /agents/{agent_id}/chat` with a prompt that invokes `query_expenses` verifies Agent runtime and tool routing still work.
 
 ## Restrictions

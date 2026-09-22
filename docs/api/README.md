@@ -1,6 +1,6 @@
 # API Reference
 
-All client traffic goes through the API Gateway at `http://localhost:8000`.
+All client traffic goes through the API Gateway at `http://localhost:8010` (Compose host port; the container still listens on 8000). On the shared droplet that URL is `http://159.89.26.67:8010`.
 Authenticated endpoints require:
 
 ```http
@@ -18,7 +18,7 @@ The Business Service owns companies, partners, invoice and expense records, fina
 Create a company first, then create partners under that company. Agents, invoices, and document uploads can then use the same `company_id`.
 
 ```bash
-curl -X POST http://localhost:8000/companies \
+curl -X POST http://localhost:8010/companies \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -31,7 +31,7 @@ curl -X POST http://localhost:8000/companies \
     "is_default": true
   }'
 
-curl -X POST http://localhost:8000/partners \
+curl -X POST http://localhost:8010/partners \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -73,7 +73,7 @@ Creates an agent for the authenticated user.
 | `config.system_prompt_override` | string or null | No | `null` | Optional custom system prompt, max 4000 characters. |
 
 ```bash
-curl -X POST http://localhost:8000/agents \
+curl -X POST http://localhost:8010/agents \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"My Accountant","agent_type":"accountant","company_id":"'"$COMPANY_ID"'","config":{"provider":"openai","temperature":0.2}}'
@@ -108,7 +108,7 @@ GET /agents?company_id={company_id}&limit=50&offset=0
 Lists the authenticated user's agents, newest first. Optional `company_id` filters to one owned company. `limit` is 1-100 and `offset` is 0 or greater.
 
 ```bash
-curl "http://localhost:8000/agents?company_id=$COMPANY_ID&limit=20&offset=0" \
+curl "http://localhost:8010/agents?company_id=$COMPANY_ID&limit=20&offset=0" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -143,7 +143,7 @@ GET /agents/{agent_id}
 Returns one agent owned by the authenticated user.
 
 ```bash
-curl "http://localhost:8000/agents/$AGENT_ID" \
+curl "http://localhost:8010/agents/$AGENT_ID" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -159,7 +159,7 @@ Content-Type: application/json
 Updates agent name, description, company assignment, and/or full config. Omitted fields are left unchanged. Explicit JSON `null` clears nullable fields such as `description`, `company_id`, and `config.system_prompt_override`. When `config` is sent, it replaces the full agent config object rather than merging nested fields.
 
 ```bash
-curl -X PATCH "http://localhost:8000/agents/$AGENT_ID" \
+curl -X PATCH "http://localhost:8010/agents/$AGENT_ID" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"VAT Advisor","config":{"provider":"anthropic","temperature":0.1}}'
@@ -168,7 +168,7 @@ curl -X PATCH "http://localhost:8000/agents/$AGENT_ID" \
 Example clearing nullable fields:
 
 ```bash
-curl -X PATCH "http://localhost:8000/agents/$AGENT_ID" \
+curl -X PATCH "http://localhost:8010/agents/$AGENT_ID" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"description":null,"company_id":null,"config":{"provider":"openai","model":"gpt-4o-mini","temperature":0.2,"system_prompt_override":null}}'
@@ -185,7 +185,7 @@ DELETE /agents/{agent_id}
 Deletes an agent owned by the authenticated user.
 
 ```bash
-curl -X DELETE "http://localhost:8000/agents/$AGENT_ID" \
+curl -X DELETE "http://localhost:8010/agents/$AGENT_ID" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -209,7 +209,7 @@ Accountant and inventory runtimes use LangChain `AgentExecutor` to execute model
 | `conversation_id` | string or null | No | Existing conversation to append to. Must belong to the same user, agent, and current agent company scope. |
 
 ```bash
-curl -N -X POST "http://localhost:8000/agents/$AGENT_ID/chat" \
+curl -N -X POST "http://localhost:8010/agents/$AGENT_ID/chat" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Accept: text/event-stream" \
   -H "Content-Type: application/json" \
@@ -259,7 +259,7 @@ Uploads a document for Agent-orchestrated classification + review routing. Form 
 | `requested_type` | string | No | `auto` (default), `invoice`, or `receipt`. |
 
 ```bash
-curl -X POST "http://localhost:8000/agents/$AGENT_ID/document-intake" \
+curl -X POST "http://localhost:8010/agents/$AGENT_ID/document-intake" \
   -H "Authorization: Bearer $TOKEN" \
   -F "requested_type=auto" \
   -F "file=@./supplier-invoice.pdf;type=application/pdf"
@@ -421,7 +421,7 @@ Content-Type: application/json
 ```
 
 ```bash
-curl -X POST "http://localhost:8000/agents/$AGENT_ID/document-intake/supplier-invoice/inventory-imports/confirm" \
+curl -X POST "http://localhost:8010/agents/$AGENT_ID/document-intake/supplier-invoice/inventory-imports/confirm" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -523,7 +523,7 @@ GET /conversations?agent_id={agent_id}&company_id={company_id}&limit=20&offset=0
 Lists conversations for one authenticated user's agent and company scope, newest first. Omit `company_id` to list conversations created while the agent was unassigned. The frontend uses this endpoint to populate the chat history menu and then loads full message history with `GET /conversations/{conversation_id}` for an explicit user selection.
 
 ```bash
-curl "http://localhost:8000/conversations?agent_id=$AGENT_ID&company_id=$COMPANY_ID&limit=20&offset=0" \
+curl "http://localhost:8010/conversations?agent_id=$AGENT_ID&company_id=$COMPANY_ID&limit=20&offset=0" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -538,7 +538,7 @@ GET /conversations/{conversation_id}
 Loads persisted conversation history for the authenticated user.
 
 ```bash
-curl "http://localhost:8000/conversations/$CONVERSATION_ID" \
+curl "http://localhost:8010/conversations/$CONVERSATION_ID" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -615,7 +615,7 @@ Creates an invoice for the authenticated user and company. Money values may be s
 | `notes` | string or null | No | `null` | Optional notes, max 2000 characters. |
 
 ```bash
-curl -X POST http://localhost:8000/invoices \
+curl -X POST http://localhost:8010/invoices \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -750,7 +750,7 @@ Allowed status transitions:
 | `cancelled` | none |
 
 ```bash
-curl -X PATCH "http://localhost:8000/invoices/$INVOICE_ID" \
+curl -X PATCH "http://localhost:8010/invoices/$INVOICE_ID" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"status":"sent","notes":"Sent to customer by email."}'
@@ -782,7 +782,7 @@ Records an expense for the authenticated user. Send either `amount` or `items`. 
 | `items` | array or null | Conditional | `null` | Required when `amount` is omitted. |
 
 ```bash
-curl -X POST http://localhost:8000/expenses \
+curl -X POST http://localhost:8010/expenses \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -875,7 +875,7 @@ Business exposes inventory as public gateway routes under `/inventory/*`. All in
 Invoice create form uses `POST /inventory/search` for line-item linking with debounced input. Typical selector request:
 
 ```bash
-curl -X POST http://localhost:8000/inventory/search \
+curl -X POST http://localhost:8010/inventory/search \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -907,7 +907,7 @@ Example response `200 OK` (`InventorySearchResponse`):
 Example create preview request:
 
 ```bash
-curl -X POST http://localhost:8000/inventory/import-previews \
+curl -X POST http://localhost:8010/inventory/import-previews \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -970,10 +970,10 @@ Response `201 Created`:
 Example confirm and cancel requests:
 
 ```bash
-curl -X POST "http://localhost:8000/inventory/import-previews/$PREVIEW_ID/confirm" \
+curl -X POST "http://localhost:8010/inventory/import-previews/$PREVIEW_ID/confirm" \
   -H "Authorization: Bearer $TOKEN"
 
-curl -X POST "http://localhost:8000/inventory/import-previews/$PREVIEW_ID/cancel" \
+curl -X POST "http://localhost:8010/inventory/import-previews/$PREVIEW_ID/cancel" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -1020,7 +1020,7 @@ Uploads and ingests a PDF, text, or Markdown document for one authenticated user
 | `company_id` | string | Yes | Owned company id. Knowledge Base validates ownership through Business Service before ingestion. |
 
 ```bash
-curl -X POST http://localhost:8000/documents \
+curl -X POST http://localhost:8010/documents \
   -H "Authorization: Bearer $TOKEN" \
   -F "company_id=$COMPANY_ID" \
   -F "file=@./tax-notes.md;type=text/markdown"
@@ -1053,7 +1053,7 @@ GET /documents?company_id=...&limit=50&offset=0
 Lists non-deleted documents for one authenticated user's company, newest first.
 
 ```bash
-curl "http://localhost:8000/documents?company_id=$COMPANY_ID&limit=20&offset=0" \
+curl "http://localhost:8010/documents?company_id=$COMPANY_ID&limit=20&offset=0" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -1085,7 +1085,7 @@ Content-Type: multipart/form-data
 Re-ingests a document owned by the authenticated user. The document keeps its original `company_id`. If the uploaded content hash matches the current document hash, the service returns the existing metadata and skips vector replacement. If content changed, old chunks are deleted from the user's ChromaDB collection and new company-tagged chunks are embedded.
 
 ```bash
-curl -X PUT "http://localhost:8000/documents/665f1f77c9e0f7a8093bb711" \
+curl -X PUT "http://localhost:8010/documents/665f1f77c9e0f7a8093bb711" \
   -H "Authorization: Bearer $TOKEN" \
   -F "file=@./tax-notes-updated.md;type=text/markdown"
 ```
@@ -1101,7 +1101,7 @@ DELETE /documents/{id}
 Deletes vector chunks from the user's ChromaDB collection and marks the MongoDB document metadata as `deleted`.
 
 ```bash
-curl -X DELETE "http://localhost:8000/documents/665f1f77c9e0f7a8093bb711" \
+curl -X DELETE "http://localhost:8010/documents/665f1f77c9e0f7a8093bb711" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
@@ -1129,7 +1129,7 @@ Retrieves relevant chunks from `global_tax`, `global_inventory`, and when a user
 | `filters` | object | No | `{}` | ChromaDB metadata filters. Values may be string, number, or boolean. |
 
 ```bash
-curl -X POST http://localhost:8000/retrieve \
+curl -X POST http://localhost:8010/retrieve \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"query":"What do my notes say about VAT?","company_id":"'"$COMPANY_ID"'","top_k":5}'

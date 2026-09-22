@@ -1,18 +1,15 @@
 name: agents
 
-# Local development stack. Builds from source (`docker compose up --build`).
-# Production on the droplet pulls GHCR images via infrastructure/docker-compose.yml
-# and deploy.sh — do not use --build on the VPS.
+# Production Compose stack. App services pull prebuilt GHCR images
+# (IMAGE_TAG). Local `up --build` can still use the build: sections.
+# Deploy path: IMAGE_TAG=<sha> bash deploy.sh  (never --build on the VPS)
 #
-# Host publish ports avoid Hint and vbar-viber-bot on 159.89.26.67:
-#   gateway  8010 → container 8000
-#   frontend 3010 → container 3000
-# MongoDB, Redis, and ChromaDB are not published on the host.
+# Host ports are chosen so this stack can share droplet 159.89.26.67
+# with Hint (8000, 3001, 1337, 3002) and vbar-viber-bot
+# (3000, 3001, 127.0.0.1:3002, 127.0.0.1:8000, 127.0.0.1:27017).
+# MongoDB, Redis, and ChromaDB stay on the Docker network only.
 
 services:
-  # === Infrastructure ===
-  # Infrastructure services stay internal to the Docker network.
-
   mongodb:
     image: mongo:7
     container_name: agents-mongodb
@@ -23,6 +20,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
     networks:
       - agents-network
 
@@ -36,6 +34,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
     networks:
       - agents-network
 
@@ -46,43 +45,50 @@ services:
       - chroma_data:/chroma/chroma
     environment:
       - IS_PERSISTENT=TRUE
+    restart: unless-stopped
     networks:
       - agents-network
 
-  # === Application Services ===
-
   auth:
+    image: ghcr.io/valiobar/agents-auth:${IMAGE_TAG:-latest}
     build:
-      context: ./services/auth
+      context: ../services/auth
       dockerfile: Dockerfile
     container_name: agents-auth
-    env_file: .env
+    env_file:
+      - ../.env
     depends_on:
       mongodb:
         condition: service_healthy
+    restart: unless-stopped
     networks:
       - agents-network
 
   business:
+    image: ghcr.io/valiobar/agents-business:${IMAGE_TAG:-latest}
     build:
-      context: ./services/business
+      context: ../services/business
       dockerfile: Dockerfile
     container_name: agents-business
-    env_file: .env
+    env_file:
+      - ../.env
     depends_on:
       mongodb:
         condition: service_healthy
+    restart: unless-stopped
     networks:
       - agents-network
 
   gateway:
+    image: ghcr.io/valiobar/agents-gateway:${IMAGE_TAG:-latest}
     build:
-      context: ./gateway
+      context: ../gateway
       dockerfile: Dockerfile
     container_name: agents-gateway
     ports:
       - "8010:8000"
-    env_file: .env
+    env_file:
+      - ../.env
     depends_on:
       redis:
         condition: service_healthy
@@ -90,64 +96,83 @@ services:
         condition: service_started
       business:
         condition: service_started
+    restart: unless-stopped
     networks:
       - agents-network
 
   agent:
+    image: ghcr.io/valiobar/agents-agent:${IMAGE_TAG:-latest}
     build:
-      context: ./services/agent
+      context: ../services/agent
       dockerfile: Dockerfile
     container_name: agents-agent
-    env_file: .env
+    env_file:
+      - ../.env
     depends_on:
       mongodb:
         condition: service_healthy
+    restart: unless-stopped
     networks:
       - agents-network
 
   knowledge:
+    image: ghcr.io/valiobar/agents-knowledge:${IMAGE_TAG:-latest}
     build:
-      context: ./services/knowledge
+      context: ../services/knowledge
       dockerfile: Dockerfile
     container_name: agents-knowledge
-    env_file: .env
+    env_file:
+      - ../.env
     volumes:
-      - ./data/knowledgebase/tax:/app/data/knowledgebase/tax:ro
+      - ../data/knowledgebase/tax:/app/data/knowledgebase/tax:ro
     depends_on:
       mongodb:
         condition: service_healthy
       chromadb:
         condition: service_started
+    restart: unless-stopped
     networks:
       - agents-network
 
   orchestrator:
+    image: ghcr.io/valiobar/agents-orchestrator:${IMAGE_TAG:-latest}
     build:
-      context: ./services/orchestrator
+      context: ../services/orchestrator
       dockerfile: Dockerfile
     container_name: agents-orchestrator
-    env_file: .env
+    env_file:
+      - ../.env
     depends_on:
       redis:
         condition: service_healthy
+    restart: unless-stopped
     networks:
       - agents-network
 
   frontend:
+    image: ghcr.io/valiobar/agents-frontend:${IMAGE_TAG:-latest}
     build:
-      context: ./frontend
+      context: ../frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_GATEWAY_URL: /gateway-api
+        GATEWAY_URL: http://gateway:8000
     container_name: agents-frontend
     ports:
       - "3010:3000"
-    env_file: .env
+    env_file:
+      - ../.env
     environment:
+      # NEXT_PUBLIC_* is inlined at image build. Runtime still sets the
+      # same-origin proxy and the internal gateway DNS name.
       - NEXT_PUBLIC_GATEWAY_URL=/gateway-api
       - GATEWAY_URL=http://gateway:8000
-      - NEXTAUTH_URL=${NEXTAUTH_URL:-http://localhost:3010}
+      - NEXTAUTH_URL=${NEXTAUTH_URL}
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
     depends_on:
       gateway:
         condition: service_started
+    restart: unless-stopped
     networks:
       - agents-network
 

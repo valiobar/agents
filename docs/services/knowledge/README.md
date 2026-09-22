@@ -13,7 +13,7 @@ Phase 2 implements the Knowledge Base Service beyond the original health-check s
 | `DELETE /documents/{id}` | Implemented | Mark metadata deleted and remove document chunks from ChromaDB |
 | `POST /retrieve` | Implemented | Search shared tax and company-scoped user document chunks |
 
-External clients call these endpoints through the API Gateway at `http://localhost:8000`. The gateway validates JWTs and injects `x-user-id` for user-scoped document operations.
+External clients call these endpoints through the API Gateway at `http://localhost:8010`. The gateway validates JWTs and injects `x-user-id` for user-scoped document operations.
 
 `POST /documents`, `GET /documents`, and user-document retrieval require a `company_id`. The Knowledge Base Service validates company ownership through the Business Service internal `GET /companies/{company_id}/exists` endpoint before storing metadata, writing uploaded chunks, or retrieving uploaded chunks. Cross-user company ids return `404`.
 

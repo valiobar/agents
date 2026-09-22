@@ -1,6 +1,6 @@
 # Frontend Architecture
 
-The frontend is a Next.js 14 application using the App Router. It serves as the single user-facing interface for the agent platform -- auth, agent management, chat, and financial data entry. All backend communication goes through the API Gateway on port 8000.
+The frontend is a Next.js 14 application using the App Router. It serves as the single user-facing interface for the agent platform -- auth, agent management, chat, and financial data entry. All backend communication goes through the API Gateway (container port 8000, published on host port 8010).
 
 This document defines the architectural pattern, directory structure, state management strategy, and component rendering approach.
 

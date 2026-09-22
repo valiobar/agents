@@ -119,7 +119,7 @@ The Business Service split is active. Gateway preserves the public API shape but
 
 Smoke checks for this boundary are:
 
-- Gateway health remains reachable through `GET http://localhost:8000/health`.
+- Gateway health remains reachable through `GET http://localhost:8010/health`.
 - Business health responds inside the Docker network at `GET http://business:8005/health`.
 - `GET /companies` through the gateway keeps the same response contract while routing to Business.
 - An Agent chat prompt that invokes `query_expenses` or `get_financial_summary` works through Agent -> Business.
@@ -358,19 +358,19 @@ The Strategy pattern (independent agent classes) makes this transition seamless 
 
 ### Docker Compose
 
-All services run on a shared Docker network. Only `frontend` (port 3000) and `gateway` (port 8000) are exposed to the host by default.
+All services run on a shared Docker network. Only the frontend and gateway are exposed to the host. Host ports are `3010` and `8010` so this stack can share droplet `159.89.26.67` with Hint and vbar-viber-bot. Container listen ports are unchanged.
 
 ```
-frontend        :3000   (exposed)
-gateway         :8000   (exposed)
+frontend        host :3010 → container :3000   (exposed)
+gateway         host :8010 → container :8000   (exposed)
 auth            :8001   (internal)
 agent           :8002   (internal)
 knowledge       :8003   (internal)
 orchestrator    :8004   (internal)
 business        :8005   (internal)
-mongodb         :27017  (internal)
-redis           :6379   (internal)
-chromadb        :8000   (internal)
+mongodb         :27017  (internal, not published)
+redis           :6379   (internal, not published)
+chromadb        :8000   (internal, not published)
 ```
 
 ### Redis Usage

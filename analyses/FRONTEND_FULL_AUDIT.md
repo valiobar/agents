@@ -206,7 +206,7 @@ The API contract requires bearer auth and SSE support:
 
 ```http
 // docs/api/README.md:3-8
-All client traffic goes through the API Gateway at http://localhost:8000.
+All client traffic goes through the API Gateway at http://localhost:8010.
 Authenticated endpoints require:
 
 Authorization: Bearer <access_token>
@@ -354,20 +354,20 @@ Next.js App Router defaults to Server Components. The strategy is: render on the
 **Severity:** Medium  
 **Effort:** Low
 
-**Problem:** `shared/config/env.ts` silently falls back to `http://localhost:8000` when gateway environment variables are missing.
+**Problem:** `shared/config/env.ts` silently falls back to `http://localhost:8010` when gateway environment variables are missing.
 
-**Impact:** This is convenient for local development, but it can hide production misconfiguration. A deployed frontend can build and run while pointing browser traffic at the user's own `localhost:8000`, which is wrong outside local development.
+**Impact:** This is convenient for local development, but it can hide production misconfiguration. Server-side code falls back to the Compose host gateway at `http://localhost:8010`. Browser calls use `publicGatewayUrl`, which defaults to the same-origin `/gateway-api` path.
 
 **Evidence:**
 
 ```ts
-// frontend/src/shared/config/env.ts:1-7
+// frontend/src/shared/config/env.ts
 export const env = {
   gatewayUrl:
     process.env.GATEWAY_URL ??
     process.env.NEXT_PUBLIC_GATEWAY_URL ??
-    "http://localhost:8000",
-  publicGatewayUrl: process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:8000",
+    "http://localhost:8010",
+  publicGatewayUrl: process.env.NEXT_PUBLIC_GATEWAY_URL ?? "/gateway-api",
 } as const;
 ```
 

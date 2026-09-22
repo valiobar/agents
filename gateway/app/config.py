@@ -12,6 +12,14 @@ class Settings(BaseSettings):
     knowledge_service_url: str = "http://knowledge:8003"
     orchestrator_service_url: str = "http://orchestrator:8004"
 
+    # Browser origins allowed to call the gateway directly.
+    # npm run dev uses :3000. Compose publishes the frontend on host :3010.
+    cors_origins: str = (
+        "http://localhost:3000,"
+        "http://localhost:3010,"
+        "http://159.89.26.67:3010"
+    )
+
     model_config = SettingsConfigDict(env_file=".env")
 
 

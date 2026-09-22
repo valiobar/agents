@@ -1,8 +1,9 @@
-services:
-  mongodb:
-    ports:
-      - "27017:27017"
+# Dev override: hot reload and extra host ports for internal services.
+# Do not publish MongoDB, Redis, or ChromaDB. Host 27017 and 8000 are
+# already taken on the shared droplet by vbar-viber-bot.
+# Gateway and frontend host ports come from docker-compose.yml (8010 and 3010).
 
+services:
   auth:
     ports:
       - "8001:8001"

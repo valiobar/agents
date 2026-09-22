@@ -211,8 +211,8 @@ The request includes `x-user-id`, so document uploads and retrieval stay scoped 
 | Component | Host exposure | Docker network access |
 |-----------|---------------|-----------------------|
 | Business Service | Not exposed to host | `http://business:8005` |
-| API Gateway | `localhost:8000` | `http://gateway:8000` |
-| MongoDB | Exposed in dev compose only | `mongodb://mongodb:27017` |
+| API Gateway | `localhost:8010` (container `8000`) | `http://gateway:8000` |
+| MongoDB | not published | `mongodb://mongodb:27017` |
 
 Production-style access should go through Gateway for public routes. Direct Business calls are for internal service-to-service traffic and Docker smoke tests.
 
